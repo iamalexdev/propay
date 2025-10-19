@@ -72,7 +72,7 @@ def get_cup_usd_rate():
         
         for element in elements:
             text = element.get_text()
-            match = re.search(r'1\s*USD\s*=\s*([\d,.]+)\s*CUP', text)
+            match = re.search(r'price-text change-plus', text)
             if match:
                 rate = float(match.group(1).replace(',', ''))
                 print(f"✅ Tasa CUP/USD obtenida: {rate}")
