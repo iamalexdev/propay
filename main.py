@@ -14,7 +14,7 @@ from flask import Flask, render_template
 import threading
 
 # Configuración
-TOKEN = "7630853977:AAGrnl9XdzC-8eONDIp-8NM-uqimlYboFcc"
+TOKEN = "8400947960:AAGGXHezQbmUqk6AOpgT1GqMLaF-rMvVp9Y"
 GROUP_CHAT_ID = "-4932107704"  # Reemplaza con el ID de tu grupo
 ADMIN_ID = 1853800972  # Reemplaza con tu ID de usuario de Telegram
 bot = telebot.TeleBot(TOKEN)
@@ -37,7 +37,7 @@ pending_crypto_deposits = {}
 
 # APIs para tasas de cambio
 API_ENDPOINTS = {
-    "eltoque": "https://eltoque.com/",
+    "eltoque": "https://eltoque.com/tasas-de-cambio-de-moneda-en-cuba-hoy",
     "binance": "https://api.binance.com/api/v3/ticker/price",
     "coingecko": "https://api.coingecko.com/api/v3/simple/price"
 }
@@ -1680,16 +1680,33 @@ def show_balance_command(message):
             reply_markup=main_menu(message.chat.id)
         )
 
-# Inicializar y ejecutar el bot
-if __name__ == "__main__":
+# INICIALIZACIÓN Y EJECUCIÓN
+def run_bot():
+    """Ejecuta el bot de Telegram en un hilo separado"""
     print("🧠 Inicializando base de datos...")
     init_db()
-    print("🤖 Iniciando bot CubaWallet...")
+    print("🤖 Iniciando bot ProCoin...")
     print(f"👑 Administrador: {ADMIN_ID}")
     print(f"📢 Notificaciones al grupo: {GROUP_CHAT_ID}")
-
+    print(f"₿ Criptomonedas soportadas: {', '.join(SUPPORTED_CRYPTO.keys())}")
+    
     # Probar notificaciones al inicio
-    test_msg = "🔔 *Bot CubaWallet iniciado* - Sistema de notificaciones activo"
+    test_msg = "🔔 *Bot ProCoin iniciado* - Sistema con tasas en tiempo real activo"
     send_group_notification(test_msg)
+    
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Error en el bot: {e}")
+        time.sleep(10)
+        run_bot()
 
-    bot.polling(none_stop=True)
+if __name__ == "__main__":
+    # Iniciar el bot en un hilo separado
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Iniciar el servidor web para Render
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
