@@ -1680,33 +1680,16 @@ def show_balance_command(message):
             reply_markup=main_menu(message.chat.id)
         )
 
-# INICIALIZACIÓN Y EJECUCIÓN
-def run_bot():
-    """Ejecuta el bot de Telegram en un hilo separado"""
+# Inicializar y ejecutar el bot
+if __name__ == "__main__":
     print("🧠 Inicializando base de datos...")
     init_db()
-    print("🤖 Iniciando bot ProCoin...")
+    print("🤖 Iniciando bot CubaWallet...")
     print(f"👑 Administrador: {ADMIN_ID}")
     print(f"📢 Notificaciones al grupo: {GROUP_CHAT_ID}")
-    print(f"₿ Criptomonedas soportadas: {', '.join(SUPPORTED_CRYPTO.keys())}")
-    
-    # Probar notificaciones al inicio
-    test_msg = "🔔 *Bot ProCoin iniciado* - Sistema con tasas en tiempo real activo"
-    send_group_notification(test_msg)
-    
-    try:
-        bot.polling(none_stop=True)
-    except Exception as e:
-        print(f"Error en el bot: {e}")
-        time.sleep(10)
-        run_bot()
 
-if __name__ == "__main__":
-    # Iniciar el bot en un hilo separado
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Iniciar el servidor web para Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    # Probar notificaciones al inicio
+    test_msg = "🔔 *Bot CubaWallet iniciado* - Sistema de notificaciones activo"
+    send_group_notification(test_msg)
+
+    bot.polling(none_stop=True)
