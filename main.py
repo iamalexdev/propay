@@ -7,34 +7,120 @@ import html
 import re
 import time
 import os
+import requests
+import json
+from bs4 import BeautifulSoup
+from flask import Flask, render_template
+import threading
 
-# Configuración - DEBES CONFIGURAR MANUALMENTE ESTOS VALORES
-TOKEN = "8400947960:AAGGXHezQbmUqk6AOpgT1GqMLaF-rMvVp9Y"
-GROUP_CHAT_ID = "-4932107704"  # Reemplaza con el ID de tu grupo
+# Configuración
+TOKEN = "7630853977:AAGrnl9XdzC-8eONDIp-8NM-uqimlYboFcc"
+GROUP_CHAT_ID = "-1002636806169"  # Reemplaza con el ID de tu grupo
 ADMIN_ID = 1853800972  # Reemplaza con tu ID de usuario de Telegram
 bot = telebot.TeleBot(TOKEN)
 
-# Diccionarios para almacenar operaciones pendientes
+# Crear app Flask para Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 CubaWallet ProCoin Bot está funcionando"
+
+@app.route('/health')
+def health():
+    return "✅ OK", 200
+
+# Diccionarios para operaciones pendientes
 pending_deposits = {}
 pending_withdrawals = {}
+pending_crypto_deposits = {}
 
-# Información de pago - CONFIGURA CON TUS DATOS REALES
-PAYMENT_INFO = {
-    "transfermovil": {
-        "name": "Tu Nombre",
-        "phone": "5351234567",
-        "bank": "Banco Meitropolitano"
-    },
-    "enzona": {
-        "name": "Tu Nombre",
-    }
+# APIs para tasas de cambio
+API_ENDPOINTS = {
+    "eltoque": "https://eltoque.com/",
+    "binance": "https://api.binance.com/api/v3/ticker/price",
+    "coingecko": "https://api.coingecko.com/api/v3/simple/price"
 }
+
+# Monedas soportadas
+SUPPORTED_CRYPTO = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum", 
+    "USDT": "tether",
+    "BNB": "binancecoin",
+    "ADA": "cardano",
+    "DOT": "polkadot",
+    "SOL": "solana"
+}
+
+# Función para obtener tasa CUP/USD desde ElToque
+def get_cup_usd_rate():
+    """
+    Obtiene la tasa de cambio CUP/USD desde ElToque.com
+    Retorna: float o None si hay error
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(API_ENDPOINTS["eltoque"], headers=headers, timeout=10)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Buscar elementos que contengan la tasa de cambio
+        # Esta es una aproximación - puede necesitar ajustes según la estructura actual de ElToque
+        elements = soup.find_all(['div', 'span'], string=re.compile(r'1\s*USD\s*=\s*[\d,.]+\s*CUP'))
+        
+        for element in elements:
+            text = element.get_text()
+            match = re.search(r'1\s*USD\s*=\s*([\d,.]+)\s*CUP', text)
+            if match:
+                rate = float(match.group(1).replace(',', ''))
+                print(f"✅ Tasa CUP/USD obtenida: {rate}")
+                return rate
+        
+        # Fallback: tasa por defecto
+        print("⚠️ No se pudo obtener tasa, usando valor por defecto")
+        return 240.0
+        
+    except Exception as e:
+        print(f"❌ Error obteniendo tasa CUP/USD: {e}")
+        return 240.0  # Tasa por defecto
+
+# Función para obtener precios crypto desde Binance
+def get_crypto_price(symbol):
+    """
+    Obtiene precio de criptomoneda desde Binance
+    """
+    try:
+        if symbol == "USDT":
+            return 1.0  # USDT siempre 1:1 con USD
+            
+        url = f"{API_ENDPOINTS['binance']}?symbol={symbol}USDT"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        return float(data['price'])
+    except Exception as e:
+        print(f"❌ Error obteniendo precio de {symbol}: {e}")
+        # Fallback a CoinGecko
+        try:
+            coin_id = SUPPORTED_CRYPTO.get(symbol)
+            if coin_id:
+                url = f"{API_ENDPOINTS['coingecko']}?ids={coin_id}&vs_currencies=usd"
+                response = requests.get(url, timeout=10)
+                data = response.json()
+                return data[coin_id]['usd']
+        except Exception as e2:
+            print(f"❌ Error con CoinGecko: {e2}")
+            
+        # Valores por defecto
+        default_prices = {
+            "BTC": 50000, "ETH": 3000, "BNB": 400, 
+            "ADA": 0.5, "DOT": 7, "SOL": 100
+        }
+        return default_prices.get(symbol, 1.0)
 
 # Función para enviar notificaciones al grupo
 def send_group_notification(message, photo_id=None):
-    """
-    Envía notificaciones al grupo configurado manualmente
-    """
     try:
         if photo_id:
             bot.send_photo(
@@ -59,7 +145,7 @@ def send_group_notification(message, photo_id=None):
 def init_db():
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
-
+    
     # Tabla de usuarios
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -71,7 +157,7 @@ def init_db():
             registered_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
+    
     # Tabla de transacciones
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
@@ -79,6 +165,7 @@ def init_db():
             from_user INTEGER,
             to_user INTEGER,
             amount REAL,
+            currency TEXT DEFAULT 'PRC',
             transaction_type TEXT,
             status TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -86,13 +173,15 @@ def init_db():
             FOREIGN KEY (to_user) REFERENCES users (user_id)
         )
     ''')
-
+    
     # Tabla de depósitos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS deposits (
             deposit_id TEXT PRIMARY KEY,
             user_id INTEGER,
-            amount REAL,
+            amount_cup REAL,
+            amount_prc REAL,
+            exchange_rate REAL,
             method TEXT,
             status TEXT,
             screenshot_id TEXT,
@@ -101,13 +190,15 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     ''')
-
+    
     # Tabla de retiros
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS withdrawals (
             withdrawal_id TEXT PRIMARY KEY,
             user_id INTEGER,
-            amount REAL,
+            amount_prc REAL,
+            amount_cup REAL,
+            exchange_rate REAL,
             fee REAL,
             net_amount REAL,
             card_number TEXT,
@@ -118,27 +209,56 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     ''')
-
+    
+    # Tabla de billeteras crypto
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS crypto_wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            currency TEXT,
+            balance REAL DEFAULT 0.0,
+            address TEXT UNIQUE,
+            created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    ''')
+    
+    # Tabla de transacciones crypto
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS crypto_transactions (
+            transaction_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            currency TEXT,
+            amount_crypto REAL,
+            amount_prc REAL,
+            exchange_rate REAL,
+            transaction_type TEXT,
+            address TEXT,
+            status TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
 # Función para limpiar la base de datos (solo admin)
 def clear_database():
-    """Limpia completamente la base de datos"""
     try:
         conn = sqlite3.connect('cubawallet.db')
         cursor = conn.cursor()
-
-        # Eliminar todas las tablas
+        
+        cursor.execute('DROP TABLE IF EXISTS crypto_transactions')
+        cursor.execute('DROP TABLE IF EXISTS crypto_wallets')
         cursor.execute('DROP TABLE IF EXISTS withdrawals')
         cursor.execute('DROP TABLE IF EXISTS deposits')
         cursor.execute('DROP TABLE IF EXISTS transactions')
         cursor.execute('DROP TABLE IF EXISTS users')
-
+        
         conn.commit()
         conn.close()
-
-        # Recrear las tablas
+        
         init_db()
         return True
     except Exception as e:
@@ -160,16 +280,30 @@ def is_admin(user_id):
 
 # Generar dirección única de wallet
 def generate_wallet_address():
-    return f"CW{uuid.uuid4().hex[:12].upper()}"
+    return f"PRC{uuid.uuid4().hex[:12].upper()}"
+
+# Generar dirección única para crypto
+def generate_crypto_address(currency):
+    prefixes = {
+        "BTC": "bc1q",
+        "ETH": "0x",
+        "USDT": "0x",
+        "BNB": "bnb1",
+        "ADA": "addr1",
+        "DOT": "1",
+        "SOL": "So1"
+    }
+    prefix = prefixes.get(currency, "crypto")
+    return f"{prefix}{uuid.uuid4().hex[:12]}"
 
 # Registrar usuario en la base de datos
 def register_user(user_id, username, first_name):
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
-
+    
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     user = cursor.fetchone()
-
+    
     if not user:
         wallet_address = generate_wallet_address()
         cursor.execute('''
@@ -177,7 +311,17 @@ def register_user(user_id, username, first_name):
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, username, first_name, wallet_address, 0.0))
         conn.commit()
-
+        
+        # Crear billeteras crypto para el usuario
+        for currency in SUPPORTED_CRYPTO.keys():
+            crypto_address = generate_crypto_address(currency)
+            cursor.execute('''
+                INSERT INTO crypto_wallets (user_id, currency, balance, address)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, currency, 0.0, crypto_address))
+        
+        conn.commit()
+        
         notification_text = f"""
 🆕 *NUEVO USUARIO REGISTRADO* 🆕
 
@@ -186,12 +330,11 @@ def register_user(user_id, username, first_name):
 • *Username:* @{escape_markdown(username) if username else 'N/A'}
 • *User ID:* `{user_id}`
 • *Wallet:* `{wallet_address}`
-• *Fecha:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-*¡Bienvenido a la familia CubaWallet\!*"""
-
+*¡Bienvenido a la familia ProCoin\!*"""
+        
         send_group_notification(notification_text)
-
+    
     conn.close()
 
 # Obtener información del usuario
@@ -212,7 +355,25 @@ def get_user_by_wallet(wallet_address):
     conn.close()
     return user
 
-# Actualizar balance
+# Obtener billeteras crypto del usuario
+def get_user_crypto_wallets(user_id):
+    conn = sqlite3.connect('cubawallet.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM crypto_wallets WHERE user_id = ?', (user_id,))
+    wallets = cursor.fetchall()
+    conn.close()
+    return wallets
+
+# Obtener billetera crypto específica
+def get_user_crypto_wallet(user_id, currency):
+    conn = sqlite3.connect('cubawallet.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM crypto_wallets WHERE user_id = ? AND currency = ?', (user_id, currency))
+    wallet = cursor.fetchone()
+    conn.close()
+    return wallet
+
+# Actualizar balance ProCoin
 def update_balance(user_id, amount):
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
@@ -220,7 +381,19 @@ def update_balance(user_id, amount):
     conn.commit()
     conn.close()
 
-# Registrar transacción
+# Actualizar balance crypto
+def update_crypto_balance(user_id, currency, amount):
+    conn = sqlite3.connect('cubawallet.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE crypto_wallets 
+        SET balance = balance + ? 
+        WHERE user_id = ? AND currency = ?
+    ''', (amount, user_id, currency))
+    conn.commit()
+    conn.close()
+
+# Registrar transacción ProCoin
 def log_transaction(transaction_id, from_user, to_user, amount, transaction_type, status):
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
@@ -231,322 +404,280 @@ def log_transaction(transaction_id, from_user, to_user, amount, transaction_type
     conn.commit()
     conn.close()
 
-# Registrar depósito
-def log_deposit(deposit_id, user_id, amount, method, status, screenshot_id=None):
+# Registrar depósito CUP
+def log_deposit(deposit_id, user_id, amount_cup, amount_prc, exchange_rate, method, status, screenshot_id=None):
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO deposits (deposit_id, user_id, amount, method, status, screenshot_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (deposit_id, user_id, amount, method, status, screenshot_id))
+        INSERT INTO deposits (deposit_id, user_id, amount_cup, amount_prc, exchange_rate, method, status, screenshot_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (deposit_id, user_id, amount_cup, amount_prc, exchange_rate, method, status, screenshot_id))
     conn.commit()
     conn.close()
 
 # Registrar retiro
-def log_withdrawal(withdrawal_id, user_id, amount, fee, net_amount, card_number, status, screenshot_id=None):
+def log_withdrawal(withdrawal_id, user_id, amount_prc, amount_cup, exchange_rate, fee, net_amount, card_number, status, screenshot_id=None):
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO withdrawals (withdrawal_id, user_id, amount, fee, net_amount, card_number, status, screenshot_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (withdrawal_id, user_id, amount, fee, net_amount, card_number, status, screenshot_id))
+        INSERT INTO withdrawals (withdrawal_id, user_id, amount_prc, amount_cup, exchange_rate, fee, net_amount, card_number, status, screenshot_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (withdrawal_id, user_id, amount_prc, amount_cup, exchange_rate, fee, net_amount, card_number, status, screenshot_id))
+    conn.commit()
+    conn.close()
+
+# Registrar transacción crypto
+def log_crypto_transaction(transaction_id, user_id, currency, amount_crypto, amount_prc, exchange_rate, transaction_type, address, status):
+    conn = sqlite3.connect('cubawallet.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO crypto_transactions (transaction_id, user_id, currency, amount_crypto, amount_prc, exchange_rate, transaction_type, address, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (transaction_id, user_id, currency, amount_crypto, amount_prc, exchange_rate, transaction_type, address, status))
     conn.commit()
     conn.close()
 
 # Menú principal con botones inline
 def main_menu(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
-
-    btn_send = types.InlineKeyboardButton("📤 Enviar Dinero", callback_data="send_money")
-    btn_receive = types.InlineKeyboardButton("📥 Recibir Dinero", callback_data="receive_money")
-    btn_deposit = types.InlineKeyboardButton("💳 Depositar", callback_data="deposit_money")
-    btn_withdraw = types.InlineKeyboardButton("💸 Retirar", callback_data="withdraw_money")
+    
+    btn_send = types.InlineKeyboardButton("📤 Enviar ProCoin", callback_data="send_money")
+    btn_receive = types.InlineKeyboardButton("📥 Recibir ProCoin", callback_data="receive_money")
+    btn_deposit = types.InlineKeyboardButton("💵 Depositar CUP", callback_data="deposit_cup")
+    btn_deposit_crypto = types.InlineKeyboardButton("₿ Depositar Crypto", callback_data="deposit_crypto")
+    btn_withdraw = types.InlineKeyboardButton("💸 Retirar CUP", callback_data="withdraw_cup")
+    btn_withdraw_crypto = types.InlineKeyboardButton("📤 Retirar Crypto", callback_data="withdraw_crypto")
     btn_balance = types.InlineKeyboardButton("💰 Ver Saldo", callback_data="check_balance")
-    btn_history = types.InlineKeyboardButton("📊 Historial", callback_data="transaction_history")
+    btn_rates = types.InlineKeyboardButton("📈 Ver Tasas", callback_data="check_rates")
+    
+    markup.add(btn_send, btn_receive, btn_deposit, btn_deposit_crypto, btn_withdraw, btn_withdraw_crypto, btn_balance, btn_rates)
+    
+    return markup
 
-    markup.add(btn_send, btn_receive, btn_deposit, btn_withdraw, btn_balance, btn_history)
-
+# Menú de selección de criptomonedas
+def crypto_selection_menu(action):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    buttons = []
+    for currency in SUPPORTED_CRYPTO.keys():
+        btn = types.InlineKeyboardButton(f"{currency}", callback_data=f"{action}_{currency}")
+        buttons.append(btn)
+    
+    btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data="back_to_main")
+    buttons.append(btn_back)
+    
+    for i in range(0, len(buttons), 2):
+        if i + 1 < len(buttons):
+            markup.add(buttons[i], buttons[i+1])
+        else:
+            markup.add(buttons[i])
+    
     return markup
 
 # COMANDOS DE ADMINISTRADOR
 
-# Comando para limpiar la base de datos
 @bot.message_handler(commands=['limpiar'])
 def clear_database_command(message):
     user_id = message.from_user.id
-
+    
     if not is_admin(user_id):
         bot.reply_to(message, "❌ *Comando solo para administradores*", parse_mode='Markdown')
         return
-
-    # Crear teclado de confirmación
+    
     markup = types.InlineKeyboardMarkup()
     btn_confirm = types.InlineKeyboardButton("✅ Sí, limpiar todo", callback_data="confirm_clear")
     btn_cancel = types.InlineKeyboardButton("❌ Cancelar", callback_data="cancel_clear")
     markup.add(btn_confirm, btn_cancel)
-
+    
     bot.reply_to(message,
                 "⚠️ *¿ESTÁS SEGURO DE QUE QUIERES LIMPIAR LA BASE DE DATOS?*\n\n"
                 "🚨 *ESTA ACCIÓN ELIMINARÁ:*\n"
                 "• Todos los usuarios registrados\n"
-                "• Todas las transacciones\n"
+                "• Todas las transacciones\n" 
                 "• Todos los depósitos y retiros\n"
-                "• Todos los saldos\n\n"
+                "• Todas las billeteras crypto\n\n"
                 "🔴 *¡ESTA ACCIÓN NO SE PUEDE DESHACER!*",
                 parse_mode='Markdown',
                 reply_markup=markup)
 
-# Comando para aprobar retiros
-@bot.message_handler(commands=['aprobar_retiro'])
-def approve_withdrawal(message):
-    user_id = message.from_user.id
-
-    if not is_admin(user_id):
-        bot.reply_to(message, "❌ *Comando solo para administradores*", parse_mode='Markdown')
-        return
-
-    parts = message.text.split()
-    if len(parts) != 3:
-        bot.reply_to(message,
-                    "❌ *Formato incorrecto*\n\n"
-                    "Uso: `/aprobar_retiro WDLABC123 100.50`\n\n"
-                    "• WDLABC123 = ID del retiro\n"
-                    "• 100.50 = Cantidad a aprobar",
-                    parse_mode='Markdown')
-        return
-
-    withdrawal_id = parts[1]
-    try:
-        amount = float(parts[2])
-    except ValueError:
-        bot.reply_to(message, "❌ *Cantidad inválida*", parse_mode='Markdown')
-        return
-
-    # Buscar el retiro en la base de datos
-    conn = sqlite3.connect('cubawallet.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM withdrawals WHERE withdrawal_id = ?', (withdrawal_id,))
-    withdrawal = cursor.fetchone()
-
-    if not withdrawal:
-        bot.reply_to(message, f"❌ *Retiro no encontrado:* `{withdrawal_id}`", parse_mode='Markdown')
-        conn.close()
-        return
-
-    user_id_withdrawal = withdrawal[1]
-    user_info = get_user_info(user_id_withdrawal)
-
-    if not user_info:
-        bot.reply_to(message, "❌ *Usuario del retiro no encontrado*", parse_mode='Markdown')
-        conn.close()
-        return
-
-    # Actualizar estado del retiro
-    cursor.execute('UPDATE withdrawals SET status = "approved", admin_approved = ? WHERE withdrawal_id = ?',
-                  (user_id, withdrawal_id))
-    conn.commit()
-    conn.close()
-
-    # Notificar al usuario
-    try:
-        user_notification = f"""
-✅ *RETIRO APROBADO*
-
-Tu solicitud de retiro ha sido procesada.
-
-📋 *Detalles:*
-• Monto retirado: ${amount:.2f}
-• Retiro ID: {withdrawal_id}
-• Tarjeta: {withdrawal[5]}
-• Estado: ✅ APROBADO
-
-El dinero ha sido enviado a tu tarjeta. ¡Gracias por usar CubaWallet! 🎉"""
-
-        bot.send_message(user_id_withdrawal, user_notification, parse_mode='Markdown')
-    except Exception as e:
-        print(f"No se pudo notificar al usuario: {e}")
-
-    # Notificar al grupo
-    group_notification = f"""
-✅ *RETIRO APROBADO* ✅
-
-*Administrador:* {escape_markdown(message.from_user.first_name)}
-*Usuario:* {escape_markdown(user_info[2])}
-*Wallet:* `{user_info[4]}`
-*Monto retirado:* ${amount:.2f}
-*Retiro ID:* `{withdrawal_id}`
-*Tarjeta:* `{withdrawal[5]}`
-
-💰 *Retiro procesado exitosamente*"""
-
-    send_group_notification(group_notification)
-
-    bot.reply_to(message,
-                f"✅ *Retiro aprobado*\n\n"
-                f"Usuario: {escape_markdown(user_info[2])}\n"
-                f"Monto: ${amount:.2f}\n"
-                f"Retiro ID: {withdrawal_id}",
-                parse_mode='Markdown')
-
-# Comando /recargar solo para administradores
 @bot.message_handler(commands=['recargar'])
 def recharge_balance(message):
     user_id = message.from_user.id
-
+    
     if not is_admin(user_id):
         bot.reply_to(message, "❌ *Comando solo para administradores*", parse_mode='Markdown')
         return
-
+    
     parts = message.text.split()
     if len(parts) != 3:
-        bot.reply_to(message,
+        bot.reply_to(message, 
                     "❌ *Formato incorrecto*\n\n"
-                    "Uso: `/recargar CWABC123 100.50`\n\n"
-                    "• CWABC123 = Wallet del usuario\n"
-                    "• 100.50 = Cantidad a recargar",
+                    "Uso: `/recargar PRCABC123 100.50`\n\n"
+                    "• PRCABC123 = Wallet del usuario\n"
+                    "• 100.50 = Cantidad de ProCoin a recargar", 
                     parse_mode='Markdown')
         return
-
+    
     wallet_address = parts[1]
     try:
         amount = float(parts[2])
     except ValueError:
         bot.reply_to(message, "❌ *Cantidad inválida*", parse_mode='Markdown')
         return
-
+    
     user_info = get_user_by_wallet(wallet_address)
     if not user_info:
         bot.reply_to(message, f"❌ *Wallet no encontrada:* `{wallet_address}`", parse_mode='Markdown')
         return
-
+    
     old_balance = user_info[3]
     update_balance(user_info[0], amount)
     new_balance = old_balance + amount
-
-    transaction_id = f"RCH{uuid.uuid4().hex[:10].upper()}"
-    log_transaction(transaction_id, None, user_info[0], amount, "recharge", "completed")
-
+    
+    transaction_id = f"ADM{uuid.uuid4().hex[:10].upper()}"
+    log_transaction(transaction_id, None, user_info[0], amount, "admin_recharge", "completed")
+    
     try:
         user_notification = f"""
-💳 *RECARGA APROBADA*
+💎 *RECARGA DE PROCOIN APROBADA*
 
-✅ Tu depósito ha sido verificado y aprobado.
+✅ Se ha recargado tu cuenta con ProCoin.
 
 📊 *Detalles:*
-• Monto recargado: ${amount:.2f}
+• ProCoin recargados: {amount:.2f} PRC
 • Wallet: `{wallet_address}`
 • Transacción: {transaction_id}
-• Saldo anterior: ${old_balance:.2f}
-• Nuevo saldo: *${new_balance:.2f}*
+• Saldo anterior: {old_balance:.2f} PRC
+• Nuevo saldo: *{new_balance:.2f} PRC*
 
-¡Gracias por usar CubaWallet! 🎉"""
-
+¡Gracias por usar ProCoin! 🎉"""
+        
         bot.send_message(user_info[0], user_notification, parse_mode='Markdown')
     except Exception as e:
         print(f"No se pudo notificar al usuario: {e}")
-
+    
     group_notification = f"""
-💰 *RECARGA MANUAL APROBADA* 💰
+💎 *RECARGA MANUAL DE PROCOIN* 💎
 
 *Administrador:* {escape_markdown(message.from_user.first_name)}
 *Usuario:* {escape_markdown(user_info[2])}
 *Wallet:* `{wallet_address}`
-*Monto:* ${amount:.2f}
+*ProCoin:* {amount:.2f} PRC
 *Transacción:* `{transaction_id}`
-*Nuevo saldo:* ${new_balance:.2f}
+*Nuevo saldo:* {new_balance:.2f} PRC
 
 ✅ *Recarga completada exitosamente*"""
-
+    
     send_group_notification(group_notification)
-
-    bot.reply_to(message,
+    
+    bot.reply_to(message, 
                 f"✅ *Recarga exitosa*\n\n"
                 f"Usuario: {escape_markdown(user_info[2])}\n"
-                f"Monto: ${amount:.2f}\n"
-                f"Nuevo saldo: ${new_balance:.2f}",
+                f"ProCoin: {amount:.2f} PRC\n"
+                f"Nuevo saldo: {new_balance:.2f} PRC",
                 parse_mode='Markdown')
 
-# Comando para estadísticas
+@bot.message_handler(commands=['tasas'])
+def show_rates_command(message):
+    """Comando para ver tasas actuales"""
+    show_current_rates(message)
+
 @bot.message_handler(commands=['estadisticas'])
 def show_stats(message):
     user_id = message.from_user.id
-
+    
     if not is_admin(user_id):
         bot.reply_to(message, "❌ *Comando solo para administradores*", parse_mode='Markdown')
         return
-
+        
     conn = sqlite3.connect('cubawallet.db')
     cursor = conn.cursor()
-
+    
     # Total de usuarios
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
-
+    
     # Total de transacciones
     cursor.execute('SELECT COUNT(*) FROM transactions')
     total_transactions = cursor.fetchone()[0]
-
-    # Volumen total movido
+    
+    # Total de transacciones crypto
+    cursor.execute('SELECT COUNT(*) FROM crypto_transactions')
+    total_crypto_transactions = cursor.fetchone()[0]
+    
+    # Volumen total en ProCoin
     cursor.execute('SELECT SUM(amount) FROM transactions WHERE status = "completed"')
-    total_volume = cursor.fetchone()[0] or 0
-
+    total_volume_prc = cursor.fetchone()[0] or 0
+    
     # Depósitos pendientes
     cursor.execute('SELECT COUNT(*) FROM deposits WHERE status = "pending"')
     pending_deposits_count = cursor.fetchone()[0]
-
+    
     # Retiros pendientes
     cursor.execute('SELECT COUNT(*) FROM withdrawals WHERE status = "pending"')
     pending_withdrawals_count = cursor.fetchone()[0]
-
+    
     conn.close()
-
+    
+    # Obtener tasas actuales
+    cup_rate = get_cup_usd_rate()
+    
     stats_text = f"""
-📈 *ESTADÍSTICAS DE CUBAWALLET*
+📈 *ESTADÍSTICAS DE PROCOIN*
 
 👥 *Usuarios registrados:* {total_users}
-🔄 *Transacciones totales:* {total_transactions}
-💰 *Volumen movido:* ${total_volume:.2f}
+🔄 *Transacciones ProCoin:* {total_transactions}
+₿ *Transacciones crypto:* {total_crypto_transactions}
+💎 *Volumen ProCoin:* {total_volume_prc:.2f} PRC
+💰 *Volumen equivalente CUP:* {total_volume_prc * cup_rate:,.0f} CUP
+
 ⏳ *Depósitos pendientes:* {pending_deposits_count}
 ⏳ *Retiros pendientes:* {pending_withdrawals_count}
 📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
-
+    
     bot.send_message(
         message.chat.id,
         stats_text,
         parse_mode='Markdown'
     )
 
-# Comando /start
+# COMANDO START
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
     username = message.from_user.username
     first_name = message.from_user.first_name
-
+    
     register_user(user_id, username, first_name)
     user_info = get_user_info(user_id)
-
+    
+    # Obtener tasas actuales
+    cup_rate = get_cup_usd_rate()
+    
     welcome_text = f"""
-👋 ¡Bienvenido a CubaWallet, {escape_markdown(first_name)}!
+👋 ¡Bienvenido a ProCoin, {escape_markdown(first_name)}!
 
-💼 *Tu Billetera Virtual Cubana*
+💎 *Tu Billetera Digital con ProCoin*
 
 📊 *Información de tu cuenta:*
 • Usuario: {escape_markdown(first_name)}
-• ID: `{user_info[4]}`
-• Saldo: ${user_info[3]:.2f}
-• Registrado: {user_info[5]}
+• Wallet: `{user_info[4]}`
+• Saldo: {user_info[3]:.2f} PRC
+• Equivalente: {user_info[3] * cup_rate:,.0f} CUP
+
+💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
 
 🌟 *¿Qué puedes hacer?*
-• 📤 Enviar dinero a otros usuarios
-• 📥 Recibir pagos con tu dirección única
-• 💳 Depositar dinero via Transfermóvil/EnZona
-• 💸 Retirar dinero a tu tarjeta (6% fee)
-• 💰 Consultar tu saldo en tiempo real
-• 📊 Ver tu historial de transacciones
+• 📤 Enviar ProCoin a otros usuarios
+• 📥 Recibir ProCoin con tu dirección única
+• 💵 Depositar CUP (se convierte a ProCoin)
+• ₿ Depositar criptomonedas (se convierte a ProCoin)
+• 💸 Retirar CUP (ProCoin a CUP)
+• 📤 Retirar criptomonedas
+• 💰 Consultar saldos y tasas
 
 ⚡ *Selecciona una opción:*"""
-
+    
     bot.send_message(
         chat_id=message.chat.id,
         text=welcome_text,
@@ -554,35 +685,35 @@ def send_welcome(message):
         reply_markup=main_menu(message.chat.id)
     )
 
-# Manejar callbacks de los botones
+# MANEJADOR DE CALLBACKS
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     user_id = call.from_user.id
     user_info = get_user_info(user_id)
-
+    
     if call.data == "send_money":
         msg = bot.send_message(
             call.message.chat.id,
-            "💸 *ENVIAR DINERO*\n\n📧 Ingresa la dirección de wallet del destinatario:",
+            "💎 *ENVIAR PROCOIN*\n\n📧 Ingresa la dirección de wallet del destinatario:",
             parse_mode='Markdown'
         )
         bot.register_next_step_handler(msg, process_recipient)
-
+    
     elif call.data == "receive_money":
         receive_text = f"""
-📥 *RECIBIR DINERO*
+📥 *RECIBIR PROCOIN*
 
 🆔 *Tu Dirección de Wallet:*
 `{user_info[4]}`
 
 📋 *Instrucciones:*
-1\. Comparte esta dirección con quien te enviará dinero
-2\. El remitente debe usar la opción *\"Enviar Dinero\"*
+1\. Comparte esta dirección con quien te enviará ProCoin
+2\. El remitente debe usar la opción *\"Enviar ProCoin\"*
 3\. Ingresa tu dirección única mostrada arriba
-4\. ¡Recibirás el dinero instantáneamente\!
+4\. ¡Recibirás los ProCoin instantáneamente\!
 
 💡 *Consejo:* Copia tu dirección haciendo clic en ella\."""
-
+        
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -590,29 +721,33 @@ def handle_callback(call):
             parse_mode='Markdown',
             reply_markup=main_menu(call.message.chat.id)
         )
+    
+    elif call.data == "deposit_cup":
+        # Obtener tasa actual
+        cup_rate = get_cup_usd_rate()
+        
+        deposit_text = f"""
+💵 *DEPOSITAR CUP*
 
-    elif call.data == "deposit_money":
+Actualmente 1 PRC = *{cup_rate:,.0f} CUP*
+
+💡 *¿Cómo funciona?*
+1. Depositas CUP via Transfermóvil/EnZona
+2. Se convierte automáticamente a ProCoin
+3. Recibes ProCoin en tu wallet al tipo de cambio actual
+
+📊 *Ejemplo:*
+• Si depositas {cup_rate:,.0f} CUP
+• Recibirás 1.00 PRC
+
+💎 *Selecciona el método de pago:*"""
+        
         deposit_methods = types.InlineKeyboardMarkup(row_width=2)
         btn_transfermovil = types.InlineKeyboardButton("📱 Transfermóvil", callback_data="deposit_transfermovil")
         btn_enzona = types.InlineKeyboardButton("🔵 EnZona", callback_data="deposit_enzona")
         btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data="back_to_main")
         deposit_methods.add(btn_transfermovil, btn_enzona, btn_back)
-
-        deposit_text = """
-💳 *DEPOSITAR DINERO*
-
-Selecciona el método de pago:
-
-📱 *Transfermóvil*:
-• Pago rápido desde tu móvil
-• Comisión: 0%
-
-🔵 *EnZona*:
-• Pago a través de la app
-• Comisión: 0%
-
-⚠️ *Nota:* Todos los depósitos requieren verificación manual"""
-
+        
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -620,45 +755,93 @@ Selecciona el método de pago:
             parse_mode='Markdown',
             reply_markup=deposit_methods
         )
+    
+    elif call.data == "deposit_crypto":
+        deposit_text = """
+₿ *DEPOSITAR CRIPTOMONEDAS*
 
-    elif call.data == "withdraw_money":
-        # Iniciar proceso de retiro
-        msg = bot.send_message(
-            call.message.chat.id,
-            "💸 *RETIRAR DINERO*\n\n💵 Ingresa el monto que deseas retirar:",
-            parse_mode='Markdown'
+Convierte tus criptomonedas a ProCoin al tipo de cambio actual.
+
+💡 *¿Cómo funciona?*
+1. Selecciona la criptomoneda
+2. Recibes una dirección única
+3. Envías las criptomonedas
+4. Se convierten automáticamente a ProCoin
+5. Recibes el equivalente en tu wallet
+
+💎 *Selecciona la criptomoneda:*"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=deposit_text,
+            parse_mode='Markdown',
+            reply_markup=crypto_selection_menu("deposit_crypto")
         )
-        bot.register_next_step_handler(msg, process_withdraw_amount)
+    
+    elif call.data.startswith("deposit_crypto_"):
+        currency = call.data.replace("deposit_crypto_", "")
+        show_crypto_deposit_address(call, currency)
+    
+    elif call.data == "withdraw_cup":
+        start_cup_withdrawal(call)
+    
+    elif call.data == "withdraw_crypto":
+        withdraw_text = """
+📤 *RETIRAR CRIPTOMONEDAS*
 
+Convierte tus ProCoin a criptomonedas.
+
+💡 *Instrucciones:*
+1. Selecciona la criptomoneda
+2. Ingresa la cantidad de ProCoin
+3. Proporciona tu dirección de destino
+4. Recibirás las criptomonedas
+
+💎 *Selecciona la criptomoneda:*"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=withdraw_text,
+            parse_mode='Markdown',
+            reply_markup=crypto_selection_menu("withdraw_crypto")
+        )
+    
+    elif call.data.startswith("withdraw_crypto_"):
+        currency = call.data.replace("withdraw_crypto_", "")
+        start_crypto_withdrawal(call, currency)
+    
+    elif call.data == "check_balance":
+        show_complete_balance(call)
+    
+    elif call.data == "check_rates":
+        show_current_rates(call)
+    
     elif call.data == "deposit_transfermovil":
-        msg = bot.send_message(
-            call.message.chat.id,
-            "💰 *DEPÓSITO POR TRANSFERMÓVIL*\n\n💵 Ingresa el monto que vas a depositar:",
-            parse_mode='Markdown'
-        )
-        bot.register_next_step_handler(msg, process_deposit_amount, "transfermovil")
-
+        start_cup_deposit(call, "transfermovil")
+    
     elif call.data == "deposit_enzona":
-        msg = bot.send_message(
-            call.message.chat.id,
-            "💰 *DEPÓSITO POR ENZONA*\n\n💵 Ingresa el monto que vas a depositar:",
-            parse_mode='Markdown'
-        )
-        bot.register_next_step_handler(msg, process_deposit_amount, "enzona")
-
+        start_cup_deposit(call, "enzona")
+    
     elif call.data == "back_to_main":
         user_info = get_user_info(user_id)
+        cup_rate = get_cup_usd_rate()
+        
         welcome_back_text = f"""
 👋 ¡Hola de nuevo, {escape_markdown(user_info[2])}!
 
-💼 *Tu Billetera Virtual Cubana*
+💎 *Tu Billetera ProCoin*
 
 📊 *Información actual:*
-• Saldo: ${user_info[3]:.2f}
+• Saldo: {user_info[3]:.2f} PRC
+• Equivalente: {user_info[3] * cup_rate:,.0f} CUP
 • Wallet: `{user_info[4]}`
 
-⚡ *Selecciona una opción:*"""
+💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
 
+⚡ *Selecciona una opción:*"""
+        
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -666,76 +849,11 @@ Selecciona el método de pago:
             parse_mode='Markdown',
             reply_markup=main_menu(call.message.chat.id)
         )
-
-    elif call.data == "check_balance":
-        balance_text = f"""
-💰 *SALDO ACTUAL*
-
-👤 Usuario: {escape_markdown(user_info[2])}
-🆔 Wallet: {user_info[4]}
-💵 Saldo: *${user_info[3]:.2f}*
-
-💳 Disponible para transferencias inmediatas\."""
-
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=balance_text,
-            parse_mode='Markdown',
-            reply_markup=main_menu(call.message.chat.id)
-        )
-
-    elif call.data == "transaction_history":
-        conn = sqlite3.connect('cubawallet.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT * FROM transactions
-            WHERE from_user = ? OR to_user = ?
-            ORDER BY timestamp DESC
-            LIMIT 5
-        ''', (user_id, user_id))
-        transactions = cursor.fetchall()
-        conn.close()
-
-        if transactions:
-            history_text = "📊 *ÚLTIMAS TRANSACCIONES*\n\n"
-            for trans in transactions:
-                transaction_id, from_user, to_user, amount, trans_type, status, timestamp = trans
-
-                if from_user == user_id:
-                    direction = "➡️ ENVIADO"
-                    other_user = to_user
-                else:
-                    direction = "⬅️ RECIBIDO"
-                    other_user = from_user
-
-                other_user_info = get_user_info(other_user)
-                other_name = escape_markdown(other_user_info[2]) if other_user_info else "Usuario"
-
-                history_text += f"""
-{direction}
-• Monto: ${amount:.2f}
-• {other_name}
-• {timestamp}
-• {transaction_id[:8]}...
-
-"""
-        else:
-            history_text = "📊 *HISTORIAL DE TRANSACCIONES*\n\nAún no has realizado transacciones\."
-
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=history_text,
-            parse_mode='Markdown',
-            reply_markup=main_menu(call.message.chat.id)
-        )
-
+    
     elif call.data == "confirm_clear":
         if is_admin(user_id):
             success = clear_database()
             if success:
-                # Notificar al grupo
                 notification_text = f"""
 🗑️ *BASE DE DATOS LIMPIADA* 🗑️
 
@@ -744,9 +862,9 @@ Selecciona el método de pago:
 
 ✅ *Todas las tablas han sido reiniciadas*
 ✅ *Sistema listo para nuevos usuarios*"""
-
+                
                 send_group_notification(notification_text)
-
+                
                 bot.edit_message_text(
                     chat_id=call.message.chat.id,
                     message_id=call.message.message_id,
@@ -760,7 +878,7 @@ Selecciona el método de pago:
                     text="❌ *Error limpiando la base de datos*",
                     parse_mode='Markdown'
                 )
-
+    
     elif call.data == "cancel_clear":
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -769,78 +887,256 @@ Selecciona el método de pago:
             parse_mode='Markdown'
         )
 
-# Procesar monto de retiro
-def process_withdraw_amount(message):
+# FUNCIONES PARA DEPÓSITOS CUP
+def start_cup_deposit(call, method):
+    cup_rate = get_cup_usd_rate()
+    
+    msg = bot.send_message(
+        call.message.chat.id,
+        f"💵 *DEPÓSITO POR {method.upper()}*\n\n"
+        f"💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP\n\n"
+        f"💵 Ingresa el monto en CUP que vas a depositar:",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, process_cup_deposit_amount, method)
+
+def process_cup_deposit_amount(message, method):
     try:
-        amount = float(message.text)
+        amount_cup = float(message.text)
         user_id = message.from_user.id
-        user_info = get_user_info(user_id)
-
-        if amount <= 0:
+        
+        if amount_cup <= 0:
             bot.send_message(
                 message.chat.id,
-                "❌ *Monto inválido*\nEl monto debe ser mayor a 0\.",
+                "❌ *Monto inválido*\nEl monto debe ser mayor a 0.",
                 parse_mode='Markdown',
                 reply_markup=main_menu(message.chat.id)
             )
             return
-
-        # Calcular fee del 6%
-        fee = amount * 0.06
-        net_amount = amount - fee
-        total_required = amount  # Se necesita el monto completo en la cuenta
-
-        if total_required > user_info[3]:
-            bot.send_message(
-                message.chat.id,
-                f"❌ *Saldo insuficiente*\n\n"
-                f"Tu saldo: ${user_info[3]:.2f}\n"
-                f"Monto a retirar: ${amount:.2f}\n"
-                f"Fee (6%): ${fee:.2f}\n"
-                f"Recibirás: ${net_amount:.2f}\n\n"
-                f"Necesitas: ${total_required:.2f}",
-                parse_mode='Markdown',
-                reply_markup=main_menu(message.chat.id)
-            )
-            return
-
-        # Guardar retiro pendiente
-        withdrawal_id = f"WDL{uuid.uuid4().hex[:10].upper()}"
-        pending_withdrawals[user_id] = {
-            'withdrawal_id': withdrawal_id,
-            'amount': amount,
-            'fee': fee,
-            'net_amount': net_amount
+        
+        # Obtener tasa actual
+        cup_rate = get_cup_usd_rate()
+        amount_prc = amount_cup / cup_rate
+        
+        # Guardar depósito pendiente
+        deposit_id = f"DEP{uuid.uuid4().hex[:10].upper()}"
+        pending_deposits[user_id] = {
+            'deposit_id': deposit_id,
+            'amount_cup': amount_cup,
+            'amount_prc': amount_prc,
+            'exchange_rate': cup_rate,
+            'method': method
         }
+        
+        if method == "transfermovil":
+            payment_text = f"""
+📱 *INSTRUCCIONES PARA PAGO POR TRANSFERMÓVIL*
 
-        # Pedir número de tarjeta
+💳 *Información para transferir:*
+• *Teléfono:* `5351234567`
+• *Nombre:* ProCoin Exchange
+• *Monto a transferir:* *{amount_cup:,.0f} CUP*
+
+📊 *Conversión:*
+• CUP depositados: {amount_cup:,.0f} CUP
+• Tasa: 1 PRC = {cup_rate:,.0f} CUP
+• ProCoin a recibir: *{amount_prc:.2f} PRC*
+
+📋 *Pasos a seguir:*
+1\. Abre tu app de Transfermóvil
+2\. Selecciona *\"Transferir\"*
+3\. Ingresa el teléfono: *5351234567*
+4\. Ingresa el monto: *{amount_cup:,.0f} CUP*
+5\. Confirma la transferencia
+6\. Toma una *captura de pantalla* del comprobante
+7\. Envíala aquí
+
+⚠️ *Importante:* 
+• El monto debe ser *exactamente* {amount_cup:,.0f} CUP
+• Solo se aceptan transferencias desde CUENTAS PROPIAS
+• La verificación puede tomar 5-15 minutos"""
+        
+        else:  # enzona
+            payment_text = f"""
+🔵 *INSTRUCCIONES PARA PAGO POR ENZONA*
+
+💳 *Información para pagar:*
+• *Nombre:* ProCoin Exchange
+• *Monto a pagar:* *{amount_cup:,.0f} CUP*
+
+📊 *Conversión:*
+• CUP depositados: {amount_cup:,.0f} CUP
+• Tasa: 1 PRC = {cup_rate:,.0f} CUP
+• ProCoin a recibir: *{amount_prc:.2f} PRC*
+
+📋 *Pasos a seguir:*
+1\. Abre tu app de EnZona
+2\. Escanea el código QR o busca *\"ProCoin Exchange\"*
+3\. Ingresa el monto: *{amount_cup:,.0f} CUP*
+4\. Realiza el pago
+5\. Toma una *captura de pantalla* del comprobante
+6\. Envíala aquí
+
+⚠️ *Importante:* 
+• El monto debe ser *exactamente* {amount_cup:,.0f} CUP
+• Solo se aceptan pagos desde CUENTAS PROPIAS
+• La verificación puede tomar 5-15 minutos"""
+        
+        # Registrar depósito pendiente
+        log_deposit(deposit_id, user_id, amount_cup, amount_prc, cup_rate, method, "pending")
+        
         bot.send_message(
             message.chat.id,
-            f"💳 *INGRESA TU NÚMERO DE TARJETA*\n\n"
-            f"📋 *Resumen del retiro:*\n"
-            f"• Monto a retirar: ${amount:.2f}\n"
-            f"• Fee (6%): ${fee:.2f}\n"
-            f"• Recibirás: ${net_amount:.2f}\n\n"
-            f"🔢 *Ingresa el número de tu tarjeta:*",
+            payment_text,
             parse_mode='Markdown'
         )
-
-        bot.register_next_step_handler(message, process_withdraw_card)
-
+        
+        msg = bot.send_message(
+            message.chat.id,
+            "📸 *Ahora envía la captura de pantalla del comprobante de pago:*",
+            parse_mode='Markdown'
+        )
+        
     except ValueError:
         bot.send_message(
             message.chat.id,
-            "❌ *Formato inválido*\nIngresa un número válido \(ej: 10\.50\)",
+            "❌ *Formato inválido*\nIngresa un número válido.",
             parse_mode='Markdown',
             reply_markup=main_menu(message.chat.id)
         )
 
-# Procesar tarjeta de retiro
-def process_withdraw_card(message):
+# FUNCIONES PARA DEPÓSITOS CRYPTO
+def show_crypto_deposit_address(call, currency):
+    user_id = call.from_user.id
+    wallet = get_user_crypto_wallet(user_id, currency)
+    
+    if not wallet:
+        bot.answer_callback_query(call.id, "❌ Billetera no encontrada")
+        return
+    
+    # Obtener precio actual
+    crypto_price = get_crypto_price(currency)
+    
+    deposit_text = f"""
+📥 *DEPOSITAR {currency}*
+
+🆔 *Tu dirección única:*
+`{wallet[4]}`
+
+💰 *Precio actual:* 1 {currency} = {crypto_price:.2f} PRC
+
+📋 *Instrucciones:*
+1\. Copia la dirección mostrada arriba
+2\. Envía *{currency}* desde tu billetera externa
+3\. Espera las confirmaciones de red
+4\. El equivalente en ProCoin se acreditará automáticamente
+
+⚠️ *Importante:*
+• Solo envías *{currency}* a esta dirección
+• Las transacciones toman 5-60 minutos
+• Mínimo de depósito: 0.0001 {currency}
+• Fee de red: Cubierto por el usuario
+
+💎 *Conversión automática a ProCoin*"""
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=deposit_text,
+        parse_mode='Markdown',
+        reply_markup=main_menu(call.message.chat.id)
+    )
+
+# FUNCIONES PARA RETIROS CUP
+def start_cup_withdrawal(call):
+    user_id = call.from_user.id
+    user_info = get_user_info(user_id)
+    cup_rate = get_cup_usd_rate()
+    
+    msg = bot.send_message(
+        call.message.chat.id,
+        f"💸 *RETIRAR CUP*\n\n"
+        f"💎 *Saldo disponible:* {user_info[3]:.2f} PRC\n"
+        f"💵 *Equivalente:* {user_info[3] * cup_rate:,.0f} CUP\n\n"
+        f"💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP\n\n"
+        f"💎 Ingresa la cantidad de ProCoin que deseas retirar (se convertirán a CUP):",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, process_cup_withdraw_amount)
+
+def process_cup_withdraw_amount(message):
+    try:
+        amount_prc = float(message.text)
+        user_id = message.from_user.id
+        user_info = get_user_info(user_id)
+        
+        if amount_prc <= 0:
+            bot.send_message(
+                message.chat.id,
+                "❌ *Monto inválido*\nEl monto debe ser mayor a 0.",
+                parse_mode='Markdown',
+                reply_markup=main_menu(message.chat.id)
+            )
+            return
+        
+        if amount_prc > user_info[3]:
+            bot.send_message(
+                message.chat.id,
+                f"❌ *Saldo insuficiente*\n\n"
+                f"Tu saldo: {user_info[3]:.2f} PRC\n"
+                f"Monto a retirar: {amount_prc:.2f} PRC",
+                parse_mode='Markdown',
+                reply_markup=main_menu(message.chat.id)
+            )
+            return
+        
+        # Calcular fee del 2% (puedes ajustar)
+        fee = amount_prc * 0.02
+        net_amount_prc = amount_prc - fee
+        
+        # Obtener tasa actual
+        cup_rate = get_cup_usd_rate()
+        amount_cup = net_amount_prc * cup_rate
+        
+        # Guardar retiro pendiente
+        withdrawal_id = f"WDL{uuid.uuid4().hex[:10].upper()}"
+        pending_withdrawals[user_id] = {
+            'withdrawal_id': withdrawal_id,
+            'amount_prc': amount_prc,
+            'amount_cup': amount_cup,
+            'exchange_rate': cup_rate,
+            'fee': fee,
+            'net_amount': net_amount_prc
+        }
+        
+        bot.send_message(
+            message.chat.id,
+            f"💳 *INGRESA TU NÚMERO DE TARJETA*\n\n"
+            f"📋 *Resumen del retiro:*\n"
+            f"• ProCoin a retirar: {amount_prc:.2f} PRC\n"
+            f"• Fee (2%): {fee:.2f} PRC\n"
+            f"• Neto a convertir: {net_amount_prc:.2f} PRC\n"
+            f"• Tasa: 1 PRC = {cup_rate:,.0f} CUP\n"
+            f"• Recibirás: {amount_cup:,.0f} CUP\n\n"
+            f"🔢 *Ingresa el número de tu tarjeta:*",
+            parse_mode='Markdown'
+        )
+        
+        bot.register_next_step_handler(message, process_cup_withdraw_card)
+        
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "❌ *Formato inválido*\nIngresa un número válido.",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+
+def process_cup_withdraw_card(message):
     user_id = message.from_user.id
     user_info = get_user_info(user_id)
     card_number = message.text.strip()
-
+    
     if user_id not in pending_withdrawals:
         bot.send_message(
             message.chat.id,
@@ -849,11 +1145,10 @@ def process_withdraw_card(message):
             reply_markup=main_menu(message.chat.id)
         )
         return
-
+    
     withdrawal_data = pending_withdrawals[user_id]
     withdrawal_id = withdrawal_data['withdrawal_id']
-
-    # Validar tarjeta (formato básico)
+    
     if len(card_number) < 10:
         bot.send_message(
             message.chat.id,
@@ -862,44 +1157,45 @@ def process_withdraw_card(message):
             reply_markup=main_menu(message.chat.id)
         )
         return
-
+    
     # Registrar retiro en la base de datos
-    log_withdrawal(withdrawal_id, user_id, withdrawal_data['amount'],
-                  withdrawal_data['fee'], withdrawal_data['net_amount'],
-                  card_number, "pending")
-
-    # Actualizar balance del usuario (congelar fondos)
-    update_balance(user_id, -withdrawal_data['amount'])
-
+    log_withdrawal(withdrawal_id, user_id, 
+                  withdrawal_data['amount_prc'], withdrawal_data['amount_cup'],
+                  withdrawal_data['exchange_rate'], withdrawal_data['fee'],
+                  withdrawal_data['net_amount'], card_number, "pending")
+    
+    # Actualizar balance (congelar fondos)
+    update_balance(user_id, -withdrawal_data['amount_prc'])
+    
     # Notificar al grupo
     group_notification = f"""
-📤 *NUEVA SOLICITUD DE RETIRO* 📤
+📤 *NUEVA SOLICITUD DE RETIRO CUP* 📤
 
 *Usuario:* {escape_markdown(user_info[2])}
-*Username:* @{escape_markdown(user_info[1]) if user_info[1] else 'N/A'}
-*User ID:* `{user_id}`
 *Wallet:* `{user_info[4]}`
-*Monto a retirar:* ${withdrawal_data['amount']:.2f}
-*Fee (6%):* ${withdrawal_data['fee']:.2f}
-*Neto a recibir:* ${withdrawal_data['net_amount']:.2f}
+*ProCoin a retirar:* {withdrawal_data['amount_prc']:.2f} PRC
+*CUP a recibir:* {withdrawal_data['amount_cup']:,.0f} CUP
+*Tasa:* 1 PRC = {withdrawal_data['exchange_rate']:,.0f} CUP
+*Fee (2%):* {withdrawal_data['fee']:.2f} PRC
 *Tarjeta:* `{card_number}`
 *Retiro ID:* `{withdrawal_id}`
 
 ⏳ *Esperando procesamiento...*
 
 💾 *Para aprobar usa:*
-`/aprobar_retiro {withdrawal_id} {withdrawal_data['amount']}`"""
-
+`/recargar {user_info[4]} {withdrawal_data['amount_prc']}`"""
+    
     send_group_notification(group_notification)
-
+    
     # Confirmar al usuario
     bot.send_message(
         message.chat.id,
         f"✅ *Solicitud de retiro enviada*\n\n"
         f"📋 *Detalles de tu retiro:*\n"
-        f"• Monto solicitado: ${withdrawal_data['amount']:.2f}\n"
-        f"• Fee (6%): ${withdrawal_data['fee']:.2f}\n"
-        f"• Recibirás: ${withdrawal_data['net_amount']:.2f}\n"
+        f"• ProCoin: {withdrawal_data['amount_prc']:.2f} PRC\n"
+        f"• Fee (2%): {withdrawal_data['fee']:.2f} PRC\n"
+        f"• Neto convertido: {withdrawal_data['net_amount']:.2f} PRC\n"
+        f"• CUP a recibir: {withdrawal_data['amount_cup']:,.0f} CUP\n"
         f"• Tarjeta: {card_number}\n"
         f"• Retiro ID: {withdrawal_id}\n\n"
         f"⏰ *Estado:* Pendiente de aprobación\n"
@@ -908,185 +1204,509 @@ def process_withdraw_card(message):
         parse_mode='Markdown',
         reply_markup=main_menu(message.chat.id)
     )
-
+    
     # Limpiar retiro pendiente
     del pending_withdrawals[user_id]
 
-# Procesar monto de depósito
-def process_deposit_amount(message, method):
+# FUNCIONES PARA RETIROS CRYPTO
+def start_crypto_withdrawal(call, currency):
+    user_id = call.from_user.id
+    user_info = get_user_info(user_id)
+    
+    # Obtener precio actual
+    crypto_price = get_crypto_price(currency)
+    
+    msg = bot.send_message(
+        call.message.chat.id,
+        f"📤 *RETIRAR {currency}*\n\n"
+        f"💎 *Saldo disponible:* {user_info[3]:.2f} PRC\n"
+        f"💰 *Precio actual:* 1 {currency} = {crypto_price:.2f} PRC\n\n"
+        f"💎 Ingresa la cantidad de ProCoin que deseas convertir a {currency}:",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, process_crypto_withdraw_amount, currency)
+
+def process_crypto_withdraw_amount(message, currency):
     try:
-        amount = float(message.text)
+        amount_prc = float(message.text)
         user_id = message.from_user.id
         user_info = get_user_info(user_id)
-
-        if amount <= 0:
+        
+        if amount_prc <= 0:
             bot.send_message(
                 message.chat.id,
-                "❌ *Monto inválido*\nEl monto debe ser mayor a 0\.",
+                "❌ *Monto inválido*\nEl monto debe ser mayor a 0.",
                 parse_mode='Markdown',
                 reply_markup=main_menu(message.chat.id)
             )
             return
-
-        deposit_id = f"DEP{uuid.uuid4().hex[:10].upper()}"
-        pending_deposits[user_id] = {
-            'deposit_id': deposit_id,
-            'amount': amount,
-            'method': method
+        
+        if amount_prc > user_info[3]:
+            bot.send_message(
+                message.chat.id,
+                f"❌ *Saldo insuficiente*\n\n"
+                f"Tu saldo: {user_info[3]:.2f} PRC\n"
+                f"Monto a retirar: {amount_prc:.2f} PRC",
+                parse_mode='Markdown',
+                reply_markup=main_menu(message.chat.id)
+            )
+            return
+        
+        # Obtener precio actual
+        crypto_price = get_crypto_price(currency)
+        amount_crypto = amount_prc / crypto_price
+        
+        # Calcular fee del 1% para crypto
+        fee = amount_prc * 0.01
+        net_amount_prc = amount_prc - fee
+        net_amount_crypto = net_amount_prc / crypto_price
+        
+        # Guardar retiro pendiente
+        withdrawal_id = f"CRYPTO_WDL{uuid.uuid4().hex[:10].upper()}"
+        pending_crypto_deposits[user_id] = {
+            'withdrawal_id': withdrawal_id,
+            'currency': currency,
+            'amount_prc': amount_prc,
+            'amount_crypto': net_amount_crypto,
+            'exchange_rate': crypto_price,
+            'fee': fee
         }
-
-        if method == "transfermovil":
-            payment_text = f"""
-📱 *INSTRUCCIONES PARA PAGO POR TRANSFERMÓVIL*
-
-💳 *Información para transferir:*
-• *Teléfono:* `{PAYMENT_INFO['transfermovil']['phone']}`
-• *Nombre:* {PAYMENT_INFO['transfermovil']['name']}
-• *Banco:* {PAYMENT_INFO['transfermovil']['bank']}
-• *Monto a transferir:* *${amount:.2f}*
-
-📋 *Pasos a seguir:*
-1\. Abre tu app de Transfermóvil
-2\. Selecciona *\"Transferir\"*
-3\. Ingresa el teléfono: *{PAYMENT_INFO['transfermovil']['phone']}*
-4\. Ingresa el monto: *${amount:.2f}*
-5\. Confirma la transferencia
-6\. Toma una *captura de pantalla* del comprobante
-7\. Envíala aquí
-
-⚠️ *Importante:*
-• El monto debe ser *exactamente* ${amount:.2f}
-• Solo se aceptan transferencias desde CUENTAS PROPIAS
-• La verificación puede tomar 5-15 minutos"""
-
-        else:
-            payment_text = f"""
-🔵 *INSTRUCCIONES PARA PAGO POR ENZONA*
-
-💳 *Información para pagar:*
-• *Nombre:* {PAYMENT_INFO['enzona']['name']}
-• *Monto a pagar:* *${amount:.2f}*
-
-📋 *Pasos a seguir:*
-1\. Abre tu app de EnZona
-2\. Escanea el código QR o busca el comercio
-3\. Ingresa el monto: *${amount:.2f}*
-4\. Realiza el pago
-5\. Toma una *captura de pantalla* del comprobante
-6\. Envíala aquí
-
-⚠️ *Importante:*
-• El monto debe ser *exactamente* ${amount:.2f}
-• Solo se aceptan pagos desde CUENTAS PROPIAS
-• La verificación puede tomar 5-15 minutos"""
-
-        log_deposit(deposit_id, user_id, amount, method, "pending")
-
+        
         bot.send_message(
             message.chat.id,
-            payment_text,
+            f"📤 *RETIRAR {currency}*\n\n"
+            f"📋 *Resumen de conversión:*\n"
+            f"• ProCoin a convertir: {amount_prc:.2f} PRC\n"
+            f"• Fee (1%): {fee:.2f} PRC\n"
+            f"• Neto a convertir: {net_amount_prc:.2f} PRC\n"
+            f"• Tasa: 1 {currency} = {crypto_price:.2f} PRC\n"
+            f"• Recibirás: {net_amount_crypto:.6f} {currency}\n\n"
+            f"🔢 *Ingresa tu dirección de {currency}:*",
             parse_mode='Markdown'
         )
-
-        msg = bot.send_message(
-            message.chat.id,
-            "📸 *Ahora envía la captura de pantalla del comprobante de pago:*",
-            parse_mode='Markdown'
-        )
-
+        
+        bot.register_next_step_handler(message, process_crypto_withdraw_address, currency)
+        
     except ValueError:
         bot.send_message(
             message.chat.id,
-            "❌ *Formato inválido*\nIngresa un número válido \(ej: 10\.50\)",
+            "❌ *Formato inválido*\nIngresa un número válido.",
             parse_mode='Markdown',
             reply_markup=main_menu(message.chat.id)
         )
 
-# Manejar capturas de pantalla de depósitos
+def process_crypto_withdraw_address(message, currency):
+    user_id = message.from_user.id
+    user_info = get_user_info(user_id)
+    address = message.text.strip()
+    
+    if user_id not in pending_crypto_deposits:
+        bot.send_message(
+            message.chat.id,
+            "❌ *No hay retiro pendiente*",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+        return
+    
+    withdrawal_data = pending_crypto_deposits[user_id]
+    withdrawal_id = withdrawal_data['withdrawal_id']
+    
+    if len(address) < 10:
+        bot.send_message(
+            message.chat.id,
+            "❌ *Dirección inválida*\n\nIngresa una dirección válida.",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+        return
+    
+    # Actualizar balance (congelar fondos)
+    update_balance(user_id, -withdrawal_data['amount_prc'])
+    
+    # Registrar transacción
+    log_crypto_transaction(withdrawal_id, user_id, currency, 
+                          withdrawal_data['amount_crypto'], withdrawal_data['amount_prc'],
+                          withdrawal_data['exchange_rate'], "withdrawal", address, "pending")
+    
+    # Notificar al grupo
+    group_notification = f"""
+📤 *NUEVO RETIRO CRYPTO PENDIENTE* 📤
+
+*Usuario:* {escape_markdown(user_info[2])}
+*Wallet:* `{user_info[4]}`
+*Moneda:* {currency}
+*ProCoin:* {withdrawal_data['amount_prc']:.2f} PRC
+*{currency} a recibir:* {withdrawal_data['amount_crypto']:.6f}
+*Tasa:* 1 {currency} = {withdrawal_data['exchange_rate']:.2f} PRC
+*Fee (1%):* {withdrawal_data['fee']:.2f} PRC
+*Dirección destino:* `{address}`
+*Retiro ID:* `{withdrawal_id}`
+
+⏳ *Esperando procesamiento...*
+
+💾 *Para aprobar usa:*
+`/recargar {user_info[4]} {withdrawal_data['amount_prc']}`"""
+    
+    send_group_notification(group_notification)
+    
+    # Confirmar al usuario
+    bot.send_message(
+        message.chat.id,
+        f"✅ *Solicitud de retiro crypto enviada*\n\n"
+        f"📋 *Detalles de tu retiro:*\n"
+        f"• Moneda: {currency}\n"
+        f"• ProCoin: {withdrawal_data['amount_prc']:.2f} PRC\n"
+        f"• Fee (1%): {withdrawal_data['fee']:.2f} PRC\n"
+        f"• {currency} a recibir: {withdrawal_data['amount_crypto']:.6f}\n"
+        f"• Dirección: {address}\n"
+        f"• Retiro ID: {withdrawal_id}\n\n"
+        f"⏰ *Estado:* Pendiente de aprobación\n"
+        f"📞 *Tiempo estimado:* 5-15 minutos\n\n"
+        f"Te notificaremos cuando sea procesado.",
+        parse_mode='Markdown',
+        reply_markup=main_menu(message.chat.id)
+    )
+    
+    # Limpiar retiro pendiente
+    del pending_crypto_deposits[user_id]
+
+# FUNCIONES DE INFORMACIÓN
+def show_complete_balance(call):
+    user_id = call.from_user.id
+    user_info = get_user_info(user_id)
+    wallets = get_user_crypto_wallets(user_id)
+    
+    # Obtener tasas actuales
+    cup_rate = get_cup_usd_rate()
+    
+    balance_text = f"""
+💰 *BALANCE COMPLETO*
+
+💎 *Balance ProCoin:*
+• Saldo disponible: {user_info[3]:.2f} PRC
+• Equivalente en CUP: {user_info[3] * cup_rate:,.0f} CUP
+
+₿ *Balance Crypto:*"""
+    
+    total_crypto_value = 0
+    for wallet in wallets:
+        if wallet[3] > 0:  # Solo mostrar wallets con balance
+            currency = wallet[2]
+            balance = wallet[3]
+            crypto_price = get_crypto_price(currency)
+            prc_value = balance * crypto_price
+            total_crypto_value += prc_value
+            
+            balance_text += f"\n• *{currency}:* {balance:.8f} ({prc_value:.2f} PRC)"
+    
+    balance_text += f"\n\n💎 *Valor total crypto:* {total_crypto_value:.2f} PRC"
+    balance_text += f"\n🏦 *Valor total general:* {user_info[3] + total_crypto_value:.2f} PRC"
+    balance_text += f"\n💵 *Equivalente total CUP:* {(user_info[3] + total_crypto_value) * cup_rate:,.0f} CUP"
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=balance_text,
+        parse_mode='Markdown',
+        reply_markup=main_menu(call.message.chat.id)
+    )
+
+def show_current_rates(call_or_message):
+    """Muestra las tasas actuales de cambio"""
+    # Obtener tasas
+    cup_rate = get_cup_usd_rate()
+    
+    rates_text = f"""
+📈 *TASAS DE CAMBIO ACTUALES*
+
+💱 *ProCoin a CUP:*
+• 1 PRC = {cup_rate:,.0f} CUP
+
+₿ *Criptomonedas a ProCoin:*"""
+    
+    for currency in SUPPORTED_CRYPTO.keys():
+        if currency != "USDT":
+            price = get_crypto_price(currency)
+            rates_text += f"\n• 1 {currency} = {price:.2f} PRC"
+    
+    rates_text += f"\n\n• 1 USDT = 1.00 PRC"
+    rates_text += f"\n\n📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    rates_text += f"\n🔍 *Fuentes:* ElToque.com, Binance, CoinGecko"
+    
+    if hasattr(call_or_message, 'message'):
+        # Es un callback
+        bot.edit_message_text(
+            chat_id=call_or_message.message.chat.id,
+            message_id=call_or_message.message.message_id,
+            text=rates_text,
+            parse_mode='Markdown',
+            reply_markup=main_menu(call_or_message.message.chat.id)
+        )
+    else:
+        # Es un mensaje
+        bot.send_message(
+            call_or_message.chat.id,
+            rates_text,
+            parse_mode='Markdown',
+            reply_markup=main_menu(call_or_message.chat.id)
+        )
+
+# MANEJADOR DE CAPTURAS DE PANTALLA
 @bot.message_handler(content_types=['photo'])
 def handle_screenshot(message):
     user_id = message.from_user.id
     user_info = get_user_info(user_id)
-
+    
     if user_id in pending_deposits:
-        # Es un depósito
+        # Es un depósito CUP
         deposit_data = pending_deposits[user_id]
         deposit_id = deposit_data['deposit_id']
-        amount = deposit_data['amount']
+        amount_cup = deposit_data['amount_cup']
+        amount_prc = deposit_data['amount_prc']
         method = deposit_data['method']
-
+        
         photo_id = message.photo[-1].file_id
-
+        
         conn = sqlite3.connect('cubawallet.db')
         cursor = conn.cursor()
         cursor.execute('UPDATE deposits SET screenshot_id = ? WHERE deposit_id = ?', (photo_id, deposit_id))
         conn.commit()
         conn.close()
-
+        
         method_display = "Transfermóvil" if method == "transfermovil" else "EnZona"
-
+        
         group_notification = f"""
-📥 *NUEVO DEPÓSITO PENDIENTE* 📥
+📥 *NUEVO DEPÓSITO CUP PENDIENTE* 📥
 
 *Usuario:* {escape_markdown(user_info[2])}
-*Username:* @{escape_markdown(user_info[1]) if user_info[1] else 'N/A'}
-*User ID:* `{user_id}`
 *Wallet:* `{user_info[4]}`
 *Método:* {method_display}
-*Monto:* ${amount:.2f}
+*CUP depositados:* {amount_cup:,.0f} CUP
+*ProCoin a recibir:* {amount_prc:.2f} PRC
+*Tasa:* 1 PRC = {deposit_data['exchange_rate']:,.0f} CUP
 *Depósito ID:* `{deposit_id}`
 
 ⏳ *Esperando verificación...*
 
 💾 *Para aprobar usa:*
-`/recargar {user_info[4]} {amount}`"""
-
+`/recargar {user_info[4]} {amount_prc}`"""
+        
         send_group_notification(group_notification, photo_id=photo_id)
-
+        
         bot.reply_to(message,
                     f"✅ *Captura recibida*\n\n"
-                    f"Hemos recibido tu comprobante por ${amount:.2f}\n\n"
+                    f"Hemos recibido tu comprobante por {amount_cup:,.0f} CUP\n\n"
+                    f"📊 *Conversión:*\n"
+                    f"• CUP: {amount_cup:,.0f} CUP\n"
+                    f"• Tasa: 1 PRC = {deposit_data['exchange_rate']:,.0f} CUP\n"
+                    f"• ProCoin a recibir: {amount_prc:.2f} PRC\n\n"
                     f"📋 *Estado:* En revisión\n"
                     f"🆔 *Depósito:* {deposit_id}\n"
                     f"⏰ *Tiempo estimado:* 5-15 minutos\n\n"
                     f"Te notificaremos cuando sea verificado.",
                     parse_mode='Markdown',
                     reply_markup=main_menu(message.chat.id))
-
+        
         del pending_deposits[user_id]
 
-    elif user_id in pending_withdrawals:
-        # Es un retiro (por si acaso, aunque no debería necesitar screenshot)
-        bot.reply_to(message,
-                    "ℹ️ *Para retiros no necesitas enviar captura*\n\n"
-                    "Tu solicitud de retiro ya fue procesada y está pendiente de aprobación.",
-                    parse_mode='Markdown',
-                    reply_markup=main_menu(message.chat.id))
-
-# Comando para ver saldo
-@bot.message_handler(commands=['saldo'])
-def show_balance(message):
+# FUNCIONES DE TRANSFERENCIA ENTRE USUARIOS
+def process_recipient(message):
+    recipient_address = message.text.strip()
     user_id = message.from_user.id
     user_info = get_user_info(user_id)
-
-    if user_info:
+    
+    # Verificar si la dirección existe
+    recipient_info = get_user_by_wallet(recipient_address)
+    
+    if not recipient_info:
         bot.send_message(
             message.chat.id,
-            f"💰 *Tu saldo actual:* ${user_info[3]:.2f}",
+            "❌ *Dirección no encontrada*\n\nVerifica la dirección e intenta nuevamente.",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+        return
+    
+    if recipient_info[0] == user_id:
+        bot.send_message(
+            message.chat.id,
+            "❌ *No puedes enviarte ProCoin a ti mismo*",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+        return
+    
+    bot.send_message(
+        message.chat.id,
+        f"✅ *Destinatario encontrado:* {escape_markdown(recipient_info[2])}\n\n💎 Ingresa la cantidad de ProCoin a enviar:",
+        parse_mode='Markdown'
+    )
+    
+    bot.register_next_step_handler(message, process_amount, recipient_info)
+
+def process_amount(message, recipient_info):
+    try:
+        amount = float(message.text)
+        user_id = message.from_user.id
+        user_info = get_user_info(user_id)
+        
+        if amount <= 0:
+            bot.send_message(
+                message.chat.id,
+                "❌ *Monto inválido*\nEl monto debe ser mayor a 0.",
+                parse_mode='Markdown',
+                reply_markup=main_menu(message.chat.id)
+            )
+            return
+        
+        if amount > user_info[3]:
+            bot.send_message(
+                message.chat.id,
+                f"❌ *Saldo insuficiente*\n\nTu saldo: {user_info[3]:.2f} PRC\nMonto a enviar: {amount:.2f} PRC",
+                parse_mode='Markdown',
+                reply_markup=main_menu(message.chat.id)
+            )
+            return
+        
+        confirm_markup = types.InlineKeyboardMarkup()
+        confirm_btn = types.InlineKeyboardButton("✅ Confirmar Envío", callback_data=f"confirm_send_{amount}_{recipient_info[0]}")
+        cancel_btn = types.InlineKeyboardButton("❌ Cancelar", callback_data="cancel_send")
+        confirm_markup.add(confirm_btn, cancel_btn)
+        
+        bot.send_message(
+            message.chat.id,
+            f"🔍 *CONFIRMAR TRANSACCIÓN*\n\n"
+            f"👤 *Destinatario:* {escape_markdown(recipient_info[2])}\n"
+            f"🆔 *Wallet:* {recipient_info[4]}\n"
+            f"💎 *Monto:* {amount:.2f} PRC\n\n"
+            f"¿Confirmas esta transacción?",
+            parse_mode='Markdown',
+            reply_markup=confirm_markup
+        )
+        
+    except ValueError:
+        bot.send_message(
+            message.chat.id,
+            "❌ *Formato inválido*\nIngresa un número válido.",
             parse_mode='Markdown',
             reply_markup=main_menu(message.chat.id)
         )
 
-# Inicializar y ejecutar el bot
-if __name__ == "__main__":
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_send_'))
+def confirm_send(call):
+    try:
+        data_parts = call.data.split('_')
+        amount = float(data_parts[2])
+        recipient_id = int(data_parts[3])
+        
+        user_id = call.from_user.id
+        user_info = get_user_info(user_id)
+        recipient_info = get_user_info(recipient_id)
+        
+        if amount > user_info[3]:
+            bot.answer_callback_query(call.id, "❌ Saldo insuficiente")
+            return
+        
+        transaction_id = f"TXN{uuid.uuid4().hex[:10].upper()}"
+        
+        update_balance(user_id, -amount)
+        update_balance(recipient_id, amount)
+        
+        log_transaction(transaction_id, user_id, recipient_id, amount, "transfer", "completed")
+        
+        success_text = f"""
+✅ *TRANSACCIÓN EXITOSA*
+
+💎 ProCoin enviados: {amount:.2f} PRC
+👤 Destinatario: {escape_markdown(recipient_info[2])}
+🆔 Transacción: {transaction_id}
+📅 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💰 Nuevo saldo: *{user_info[3] - amount:.2f} PRC*"""
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=success_text,
+            parse_mode='Markdown',
+            reply_markup=main_menu(call.message.chat.id)
+        )
+        
+        try:
+            recipient_notification = f"""
+💰 *HAS RECIBIDO PROCOIN*
+
+💎 ProCoin recibidos: {amount:.2f} PRC
+👤 Remitente: {escape_markdown(user_info[2])}
+🆔 Transacción: {transaction_id}
+
+💳 Nuevo saldo: *{recipient_info[3] + amount:.2f} PRC*"""
+            
+            bot.send_message(
+                chat_id=recipient_id,
+                text=recipient_notification,
+                parse_mode='Markdown'
+            )
+        except:
+            pass
+        
+    except Exception as e:
+        print(f"Error en transacción: {e}")
+        bot.answer_callback_query(call.id, "❌ Error en la transacción")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'cancel_send')
+def cancel_send(call):
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="❌ *Transacción cancelada*",
+        parse_mode='Markdown',
+        reply_markup=main_menu(call.message.chat.id)
+    )
+
+# COMANDO PARA VER SALDO
+@bot.message_handler(commands=['saldo'])
+def show_balance_command(message):
+    user_id = message.from_user.id
+    user_info = get_user_info(user_id)
+    
+    if user_info:
+        cup_rate = get_cup_usd_rate()
+        bot.send_message(
+            message.chat.id,
+            f"💰 *Tu saldo actual:* {user_info[3]:.2f} PRC\n💵 *Equivalente:* {user_info[3] * cup_rate:,.0f} CUP",
+            parse_mode='Markdown',
+            reply_markup=main_menu(message.chat.id)
+        )
+
+# INICIALIZACIÓN Y EJECUCIÓN
+def run_bot():
+    """Ejecuta el bot de Telegram en un hilo separado"""
     print("🧠 Inicializando base de datos...")
     init_db()
-    print("🤖 Iniciando bot CubaWallet...")
+    print("🤖 Iniciando bot ProCoin...")
     print(f"👑 Administrador: {ADMIN_ID}")
     print(f"📢 Notificaciones al grupo: {GROUP_CHAT_ID}")
-
+    print(f"₿ Criptomonedas soportadas: {', '.join(SUPPORTED_CRYPTO.keys())}")
+    
     # Probar notificaciones al inicio
-    test_msg = "🔔 *Bot CubaWallet iniciado* - Sistema de notificaciones activo"
+    test_msg = "🔔 *Bot ProCoin iniciado* - Sistema con tasas en tiempo real activo"
     send_group_notification(test_msg)
+    
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Error en el bot: {e}")
+        time.sleep(10)
+        run_bot()
 
-    bot.polling(none_stop=True)
+if __name__ == "__main__":
+    # Iniciar el bot en un hilo separado
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Iniciar el servidor web para Render
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
