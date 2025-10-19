@@ -15,7 +15,7 @@ import threading
 
 # Configuración
 TOKEN = "7630853977:AAGrnl9XdzC-8eONDIp-8NM-uqimlYboFcc"
-GROUP_CHAT_ID = "-1002636806169"  # Reemplaza con el ID de tu grupo
+GROUP_CHAT_ID = "-4932107704"  # Reemplaza con el ID de tu grupo
 ADMIN_ID = 1853800972  # Reemplaza con tu ID de usuario de Telegram
 bot = telebot.TeleBot(TOKEN)
 
