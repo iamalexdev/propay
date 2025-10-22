@@ -149,7 +149,6 @@ def get_cup_usd_rate():
         print(f"💰 Cálculo: {eur_rate} CUP/EUR / {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
         
         # Ajustar a múltiplo de 5 para hacerlo más realista
-        cup_usd_rate = round(cup_usd_rate / 5) * 5
         
         print(f"✅ Tasa CUP/USD calculada: {cup_usd_rate} CUP/USD")
         return cup_usd_rate
