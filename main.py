@@ -41,10 +41,50 @@ API_ENDPOINTS = {
     "coingecko": "https://api.coingecko.com/api/v3/simple/price"
 }
 
-# Función para obtener tasa CUP/USD desde ElToque
+# Función para obtener tasa EUR/USD desde APIs financieras
+def get_eur_usd_rate():
+    """
+    Obtiene la tasa de cambio EUR/USD desde APIs financieras
+    Retorna: float o None si hay error
+    """
+    try:
+        # Try CoinGecko first
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=eur"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if 'usd-coin' in data and 'eur' in data['usd-coin']:
+            eur_rate = data['usd-coin']['eur']
+            usd_eur_rate = 1 / eur_rate  # Convert to EUR/USD
+            print(f"✅ Tasa EUR/USD obtenida de CoinGecko: {usd_eur_rate:.4f}")
+            return usd_eur_rate
+            
+    except Exception as e:
+        print(f"❌ Error con CoinGecko: {e}")
+    
+    try:
+        # Fallback: API de tipo de cambio
+        url = "https://api.exchangerate-api.com/v4/latest/USD"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if 'rates' in data and 'EUR' in data['rates']:
+            usd_eur_rate = data['rates']['EUR']
+            print(f"✅ Tasa EUR/USD obtenida de ExchangeRate: {usd_eur_rate:.4f}")
+            return usd_eur_rate
+            
+    except Exception as e:
+        print(f"❌ Error con ExchangeRate: {e}")
+    
+    # Fallback: tasa fija aproximada
+    default_rate = 0.92  # 1 USD = 0.92 EUR (aproximado)
+    print(f"⚠️ Usando tasa EUR/USD por defecto: {default_rate}")
+    return default_rate
+
+# Función para obtener tasa CUP/USD calculada desde el EURO
 def get_cup_usd_rate():
     """
-    Obtiene la tasa de cambio CUP/USD desde ElToque.com
+    Obtiene la tasa de cambio CUP/USD calculada desde el EURO de ElToque
     Retorna: float o None si hay error
     """
     try:
@@ -55,57 +95,71 @@ def get_cup_usd_rate():
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
+        all_text = soup.get_text()
         
-        # Buscar elementos que contengan la clase "price-text change-plus"
-        # Esta es la clase específica donde ElToque muestra la tasa
-        rate_elements = soup.find_all(class_=re.compile(r'price-text change-plus'))
+        # Estrategia 1: Buscar específicamente el EURO
+        eur_patterns = [
+            r'1\s*EUR\s*[=≈]\s*([\d.,]+)\s*CUP',
+            r'EUR\s*[=:]\s*([\d.,]+)\s*CUP',
+            r'EUR\s*([\d.,]+)\s*CUP',
+            r'([\d.,]+)\s*CUP\s*por\s*EUR',
+            r'EUR\/CUP[^\d]*([\d.,]+)',
+            r'€\s*[=:]\s*([\d.,]+)\s*CUP'
+        ]
         
-        for element in rate_elements:
-            text = element.get_text().strip()
-            # Buscar patrones numéricos en el texto
-            matches = re.findall(r'[\d.,]+', text)
-            if matches:
-                # Tomar el primer número encontrado y limpiarlo
-                rate_str = matches[0].replace(',', '')
+        eur_rate = None
+        
+        for pattern in eur_patterns:
+            match = re.search(pattern, all_text, re.IGNORECASE)
+            if match:
+                rate_str = match.group(1).replace(',', '')
                 try:
                     rate = float(rate_str)
-                    # Verificar que sea una tasa razonable
-                    if 10 < rate < 1000:
-                        print(f"✅ Tasa CUP/USD obtenida: {rate}")
-                        return rate
+                    if 500 <= rate <= 600:  # Rango razonable para EUR
+                        eur_rate = rate
+                        print(f"✅ Tasa EUR obtenida de ElToque: {eur_rate} CUP/EUR")
+                        break
                 except ValueError:
                     continue
         
-        # Si no encontramos en elementos específicos, buscar en todo el contenido
-        all_text = soup.get_text()
-        # Buscar patrones como "1 USD = 120 CUP" o similares
-        pattern = r'1\s*USD\s*[=≈]\s*([\d.,]+)\s*CUP'
-        match = re.search(pattern, all_text, re.IGNORECASE)
+        if eur_rate is None:
+            # Estrategia 2: Buscar cualquier número en el rango del EURO
+            eur_matches = re.findall(r'\b(5[0-9]{2})\b', all_text)
+            for match in eur_matches:
+                try:
+                    rate = float(match)
+                    if 530 <= rate <= 560:  # Rango típico del EUR
+                        eur_rate = rate
+                        print(f"✅ Tasa EUR aproximada: {eur_rate} CUP/EUR")
+                        break
+                except ValueError:
+                    continue
         
-        if match:
-            rate_str = match.group(1).replace(',', '')
-            rate = float(rate_str)
-            if 400 < rate < 500:
-                print(f"✅ Tasa CUP/USD obtenida (patrón texto): {rate}")
-                return rate
+        if eur_rate is None:
+            # Fallback: si no encontramos EUR, usar valor por defecto
+            eur_rate = 540.0
+            print(f"⚠️ No se pudo obtener tasa EUR, usando valor por defecto: {eur_rate}")
         
-        # Fallback: tasa por defecto
-        print("⚠️ No se pudo obtener tasa, usando valor por defecto 480.0")
-        return 480.0
+        # Obtener tasa EUR/USD
+        eur_usd_rate = get_eur_usd_rate()
+        
+        # Calcular CUP/USD: (CUP/EUR) × (EUR/USD)
+        cup_usd_rate = eur_rate * eur_usd_rate
+        
+        print(f"💰 Cálculo: {eur_rate} CUP/EUR × {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
+        
+        # Ajustar a múltiplo de 5 para hacerlo más realista
+        cup_usd_rate = round(cup_usd_rate / 5) * 5
+        
+        print(f"✅ Tasa CUP/USD calculada: {cup_usd_rate} CUP/USD")
+        return cup_usd_rate
         
     except requests.RequestException as e:
-        print(f"❌ Error de conexión obteniendo tasa CUP/USD: {e}")
-        return 480.0
+        print(f"❌ Error de conexión: {e}")
+        return 485.0
     except Exception as e:
-        print(f"❌ Error inesperado obteniendo tasa CUP/USD: {e}")
-        return 480.0
-
-# Función de prueba
-def test_eltoque_scraping():
-    """Función para probar el scraping de ElToque"""
-    rate = get_cup_usd_rate()
-    print(f"Tasa obtenida: {rate} CUP/USD")
-    return rate
+        print(f"❌ Error inesperado: {e}")
+        return 485.0
 
 # Función para enviar notificaciones al grupo
 def send_group_notification(message, photo_id=None):
@@ -989,19 +1043,52 @@ def show_complete_balance(call):
     )
 
 def show_current_rates(call_or_message):
-    """Muestra las tasas actuales de cambio"""
+    """Muestra las tasas actuales de cambio con todos los detalles"""
     # Obtener tasas
-    cup_rate = get_cup_usd_rate()
+    cup_usd_rate = get_cup_usd_rate()
+    
+    # Para mostrar también la tasa EUR que usamos para el cálculo
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(API_ENDPOINTS["eltoque"], headers=headers, timeout=5)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        all_text = soup.get_text()
+        
+        eur_rate = None
+        eur_pattern = r'1\s*EUR\s*[=≈]\s*([\d.,]+)\s*CUP'
+        match = re.search(eur_pattern, all_text, re.IGNORECASE)
+        if match:
+            eur_rate = float(match.group(1).replace(',', ''))
+    except:
+        eur_rate = 540.0  # Valor por defecto
+
+    eur_usd_rate = get_eur_usd_rate()
     
     rates_text = f"""
-📈 *TASAS DE CAMBIO ACTUALES*
+📈 *TASAS DE CAMBIO CALCULADAS*
 
-💱 *ProCoin a CUP:*
-• 1 PRC = {cup_rate:,.0f} CUP
+💶 *Tasa Base (ElToque):*
+• 1 EUR = {eur_rate:,.0f} CUP
 
-📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}
-🔍 *Fuente:* ElToque.com"""
-    
+💱 *Tasa Internacional:*
+• 1 USD = {eur_usd_rate:.3f} EUR
+
+💵 *Tasa Calculada USD:*
+• 1 USD = {cup_usd_rate:,.0f} CUP
+• 1 PRC = {cup_usd_rate:,.0f} CUP
+
+📊 *Conversiones comunes:*
+• 10 PRC = {10 * cup_usd_rate:,.0f} CUP
+• 50 PRC = {50 * cup_usd_rate:,.0f} CUP  
+• 100 PRC = {100 * cup_usd_rate:,.0f} CUP
+
+🔢 *Cálculo:*
+{eur_rate:,.0f} CUP/EUR × {eur_usd_rate:.3f} EUR/USD = {cup_usd_rate:,.0f} CUP/USD
+
+📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
+
     if hasattr(call_or_message, 'message'):
         # Es un callback
         bot.edit_message_text(
