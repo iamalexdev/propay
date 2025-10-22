@@ -11,6 +11,7 @@ import requests
 import json
 from bs4 import BeautifulSoup
 from flask import Flask, render_template
+import threading
 
 # Configuración
 TOKEN = "8400947960:AAGGXHezQbmUqk6AOpgT1GqMLaF-rMvVp9Y"
