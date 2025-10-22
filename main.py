@@ -115,7 +115,7 @@ def get_cup_usd_rate():
                 rate_str = match.group(1).replace(',', '')
                 try:
                     rate = float(rate_str)
-                    if 500 <= rate <= 600:  # Rango razonable para EUR
+                    if 10 <= rate <= 1000:  # Rango razonable para EUR
                         eur_rate = rate
                         print(f"✅ Tasa EUR obtenida de ElToque: {eur_rate} CUP/EUR")
                         break
@@ -144,7 +144,7 @@ def get_cup_usd_rate():
         eur_usd_rate = get_eur_usd_rate()
         
         # Calcular CUP/USD: (CUP/EUR) × (EUR/USD)
-        cup_usd_rate = eur_rate * eur_usd_rate
+        cup_usd_rate = eur_rate / eur_usd_rate
         
         print(f"💰 Cálculo: {eur_rate} CUP/EUR / {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
         
