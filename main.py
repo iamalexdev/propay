@@ -80,11 +80,11 @@ def get_cup_usd_rate():
         
         # Fallback: tasa por defecto
         print("⚠️ No se pudo obtener tasa, usando valor por defecto")
-        return 240.0
+        return 480.0
         
     except Exception as e:
         print(f"❌ Error obteniendo tasa CUP/USD: {e}")
-        return 240.0  # Tasa por defecto
+        return 480.0  # Tasa por defecto
 
 # Función para obtener precios crypto desde Binance
 def get_crypto_price(symbol):
@@ -662,20 +662,6 @@ def send_welcome(message):
 📊 *Información de tu cuenta:*
 • Usuario: {escape_markdown(first_name)}
 • Wallet: `{user_info[4]}`
-• Saldo: {user_info[3]:.2f} PRC
-• Equivalente: {user_info[3] * cup_rate:,.0f} CUP
-
-💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
-
-🌟 *¿Qué puedes hacer?*
-• 📤 Enviar ProCoin a otros usuarios
-• 📥 Recibir ProCoin con tu dirección única
-• 💵 Depositar CUP (se convierte a ProCoin)
-• ₿ Depositar criptomonedas (se convierte a ProCoin)
-• 💸 Retirar CUP (ProCoin a CUP)
-• 📤 Retirar criptomonedas
-• 💰 Consultar saldos y tasas
-
 ⚡ *Selecciona una opción:*"""
     
     bot.send_message(
