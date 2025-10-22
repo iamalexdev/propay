@@ -128,7 +128,7 @@ def get_cup_usd_rate():
             for match in eur_matches:
                 try:
                     rate = float(match)
-                    if 530 <= rate <= 560:  # Rango típico del EUR
+                    if 10 <= rate <= 1000:  # Rango típico del EUR
                         eur_rate = rate
                         print(f"✅ Tasa EUR aproximada: {eur_rate} CUP/EUR")
                         break
@@ -146,7 +146,7 @@ def get_cup_usd_rate():
         # Calcular CUP/USD: (CUP/EUR) × (EUR/USD)
         cup_usd_rate = eur_rate * eur_usd_rate
         
-        print(f"💰 Cálculo: {eur_rate} CUP/EUR × {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
+        print(f"💰 Cálculo: {eur_rate} CUP/EUR / {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
         
         # Ajustar a múltiplo de 5 para hacerlo más realista
         cup_usd_rate = round(cup_usd_rate / 5) * 5
