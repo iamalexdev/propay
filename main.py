@@ -85,7 +85,7 @@ def get_cup_usd_rate():
         if match:
             rate_str = match.group(1).replace(',', '')
             rate = float(rate_str)
-            if 10 < rate < 1000:
+            if 400 < rate < 500:
                 print(f"✅ Tasa CUP/USD obtenida (patrón texto): {rate}")
                 return rate
         
