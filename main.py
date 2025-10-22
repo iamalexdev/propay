@@ -42,17 +42,6 @@ API_ENDPOINTS = {
     "coingecko": "https://api.coingecko.com/api/v3/simple/price"
 }
 
-# Monedas soportadas
-SUPPORTED_CRYPTO = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum", 
-    "USDT": "tether",
-    "BNB": "binancecoin",
-    "ADA": "cardano",
-    "DOT": "polkadot",
-    "SOL": "solana"
-}
-
 # Función para obtener tasa CUP/USD desde ElToque
 def get_cup_usd_rate():
     """
@@ -61,31 +50,63 @@ def get_cup_usd_rate():
     """
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         response = requests.get(API_ENDPOINTS["eltoque"], headers=headers, timeout=10)
+        response.raise_for_status()
+        
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Buscar elementos que contengan la tasa de cambio
-        # Esta es una aproximación - puede necesitar ajustes según la estructura actual de ElToque
-        elements = soup.find_all(['div', 'span'], string=re.compile(r'1\s*USD\s*=\s*[\d,.]+\s*CUP'))
+        # Buscar elementos que contengan la clase "price-text change-plus"
+        # Esta es la clase específica donde ElToque muestra la tasa
+        rate_elements = soup.find_all(class_=re.compile(r'price-text change-plus'))
         
-        for element in elements:
-            text = element.get_text()
-            match = re.search(r'price-text change-plus', text)
-            if match:
-                rate = float(match.group(1).replace(',', ''))
-                print(f"✅ Tasa CUP/USD obtenida: {rate}")
+        for element in rate_elements:
+            text = element.get_text().strip()
+            # Buscar patrones numéricos en el texto
+            matches = re.findall(r'[\d.,]+', text)
+            if matches:
+                # Tomar el primer número encontrado y limpiarlo
+                rate_str = matches[0].replace(',', '')
+                try:
+                    rate = float(rate_str)
+                    # Verificar que sea una tasa razonable
+                    if 10 < rate < 1000:
+                        print(f"✅ Tasa CUP/USD obtenida: {rate}")
+                        return rate
+                except ValueError:
+                    continue
+        
+        # Si no encontramos en elementos específicos, buscar en todo el contenido
+        all_text = soup.get_text()
+        # Buscar patrones como "1 USD = 120 CUP" o similares
+        pattern = r'1\s*USD\s*[=≈]\s*([\d.,]+)\s*CUP'
+        match = re.search(pattern, all_text, re.IGNORECASE)
+        
+        if match:
+            rate_str = match.group(1).replace(',', '')
+            rate = float(rate_str)
+            if 10 < rate < 1000:
+                print(f"✅ Tasa CUP/USD obtenida (patrón texto): {rate}")
                 return rate
         
         # Fallback: tasa por defecto
-        print("⚠️ No se pudo obtener tasa, usando valor por defecto")
+        print("⚠️ No se pudo obtener tasa, usando valor por defecto 480.0")
         return 480.0
         
+    except requests.RequestException as e:
+        print(f"❌ Error de conexión obteniendo tasa CUP/USD: {e}")
+        return 480.0
     except Exception as e:
-        print(f"❌ Error obteniendo tasa CUP/USD: {e}")
-        return 480.0  # Tasa por defecto
+        print(f"❌ Error inesperado obteniendo tasa CUP/USD: {e}")
+        return 480.0
 
+# Función de prueba
+def test_eltoque_scraping():
+    """Función para probar el scraping de ElToque"""
+    rate = get_cup_usd_rate()
+    print(f"Tasa obtenida: {rate} CUP/USD")
+    return rate
 # Función para obtener precios crypto desde Binance
 def get_crypto_price(symbol):
     """
