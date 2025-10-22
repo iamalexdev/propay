@@ -96,10 +96,10 @@ def get_cup_usd_rate():
         
     except requests.RequestException as e:
         print(f"❌ Error de conexión obteniendo tasa CUP/USD: {e}")
-        return 480.0
+        return 470.0
     except Exception as e:
         print(f"❌ Error inesperado obteniendo tasa CUP/USD: {e}")
-        return 480.0
+        return 470.0
 
 # Función de prueba
 def test_eltoque_scraping():
