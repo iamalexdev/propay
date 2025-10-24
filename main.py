@@ -34,96 +34,110 @@ def health():
 pending_deposits = {}
 pending_withdrawals = {}
 
-# APIs para tasas de cambio
-API_ENDPOINTS = {
-    "eltoque": "https://eltoque.com/tasas-de-cambio-de-moneda-en-cuba-hoy",
-    "binance": "https://api.binance.com/api/v3/ticker/price",
-    "coingecko": "https://api.coingecko.com/api/v3/simple/price"
-}
+# Configuración de la API ElToque
+ELTOQUE_API_URL = "https://tasas.eltoque.com/v1/trmi"
+# Necesitarás obtener un token válido de ElToque
+ELTOQUE_API_TOKEN = "tu_token_aqui"  # Reemplaza con tu token real
 
-# Función para obtener tasa EUR/USD desde APIs financieras
-def get_eur_usd_rate():
-    """
-    Obtiene la tasa de cambio EUR/USD desde APIs financieras
-    Retorna: float o None si hay error
-    """
-    try:
-        # Try CoinGecko first
-        url = "https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=eur"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if 'usd-coin' in data and 'eur' in data['usd-coin']:
-            eur_rate = data['usd-coin']['eur']
-            usd_eur_rate = 1 / eur_rate  # Convert to EUR/USD
-            print(f"✅ Tasa EUR/USD obtenida de CoinGecko: {usd_eur_rate:.4f}")
-            return usd_eur_rate
-            
-    except Exception as e:
-        print(f"❌ Error con CoinGecko: {e}")
-    
-    try:
-        # Fallback: API de tipo de cambio
-        url = "https://api.exchangerate-api.com/v4/latest/USD"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if 'rates' in data and 'EUR' in data['rates']:
-            usd_eur_rate = data['rates']['EUR']
-            print(f"✅ Tasa EUR/USD obtenida de ExchangeRate: {usd_eur_rate:.4f}")
-            return usd_eur_rate
-            
-    except Exception as e:
-        print(f"❌ Error con ExchangeRate: {e}")
-    
-    # Fallback: tasa fija aproximada
-    default_rate = 0.92  # 1 USD = 0.92 EUR (aproximado)
-    print(f"⚠️ Usando tasa EUR/USD por defecto: {default_rate}")
-    return default_rate
-
-# Función para obtener tasas de cambio desde la API de ElToque
+# Función mejorada para obtener tasas de cambio
 def get_eltoque_rates():
     """
     Obtiene las tasas de cambio desde la API oficial de ElToque
     Retorna: dict con las tasas o None si hay error
     """
     try:
-        # Endpoint de la API de ElToque para tasas de cambio
-        api_url = "https://tasas.eltoque.com/v1/trmi?date_from=2025-10-24%2000%3A00%3A01&date_to=2025-10-24%2023%3A59%3A01"
+        # Formatear fechas para hoy
+        today = datetime.now().strftime("%Y-%m-%d")
+        date_from = f"{today} 00:00:01"
+        date_to = f"{today} 23:59:01"
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
+        # Parámetros de la consulta
+        params = {
+            'date_from': date_from,
+            'date_to': date_to
         }
         
-        response = requests.get(api_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        headers = {
+            'accept': '*/*',
+            'Authorization': f'Bearer {ELTOQUE_API_TOKEN}',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
+        print(f"🔗 Solicitando tasas a API ElToque...")
+        response = requests.get(ELTOQUE_API_URL, params=params, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            print(f"❌ Error HTTP {response.status_code}: {response.text}")
+            return None
+            
         data = response.json()
+        print(f"✅ Respuesta API recibida exitosamente")
         
-        # Procesar la respuesta según la estructura de la API
+        # Procesar diferentes estructuras posibles de respuesta
         rates = {}
         
-        # Buscar las tasas en la estructura JSON
-        if 'data' in data:
-            for rate_data in data['data']:
-                if 'currency' in rate_data and 'price' in rate_data:
-                    currency = rate_data['currency'].upper()
-                    price = float(rate_data['price'])
-                    rates[currency] = price
+        # Caso 1: Array de tasas
+        if isinstance(data, list):
+            for item in data:
+                self._process_rate_item(item, rates)
         
-        print(f"✅ Tasas obtenidas de API ElToque: {rates}")
+        # Caso 2: Objeto único
+        elif isinstance(data, dict):
+            self._process_rate_item(data, rates)
+        
+        # Caso 3: Respuesta con campo 'data'
+        elif isinstance(data, dict) and 'data' in data:
+            data_content = data['data']
+            if isinstance(data_content, list):
+                for item in data_content:
+                    self._process_rate_item(item, rates)
+            else:
+                self._process_rate_item(data_content, rates)
+        
+        print(f"💰 Tasas extraídas: {rates}")
         return rates
         
-    except requests.RequestException as e:
-        print(f"❌ Error de conexión con API ElToque: {e}")
+    except requests.exceptions.Timeout:
+        print("❌ Timeout conectando a API ElToque")
+        return None
+    except requests.exceptions.ConnectionError:
+        print("❌ Error de conexión con API ElToque")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error en solicitud a API ElToque: {e}")
+        return None
+    except ValueError as e:
+        print(f"❌ Error parseando JSON de API ElToque: {e}")
         return None
     except Exception as e:
-        print(f"❌ Error procesando API ElToque: {e}")
+        print(f"❌ Error inesperado en API ElToque: {e}")
         return None
 
-# Función para obtener tasa CUP/USD desde la API de ElToque
+def _process_rate_item(item, rates_dict):
+    """Procesa un item individual de tasa y lo añade al diccionario"""
+    try:
+        # Diferentes posibles estructuras de campo
+        currency = None
+        price = None
+        
+        if 'currency' in item and 'price' in item:
+            currency = item['currency'].upper()
+            price = float(item['price'])
+        elif 'moneda' in item and 'tasa' in item:
+            currency = item['moneda'].upper()
+            price = float(item['tasa'])
+        elif 'code' in item and 'rate' in item:
+            currency = item['code'].upper()
+            price = float(item['rate'])
+        
+        if currency and price is not None:
+            rates_dict[currency] = price
+            print(f"  - {currency}: {price}")
+            
+    except (KeyError, ValueError, TypeError) as e:
+        print(f"  ⚠️ Error procesando item: {e}")
+
+# Función para obtener tasa CUP/USD
 def get_cup_usd_rate():
     """
     Obtiene la tasa de cambio CUP/USD desde la API de ElToque
@@ -132,10 +146,14 @@ def get_cup_usd_rate():
     try:
         rates = get_eltoque_rates()
         
-        if rates and 'USD' in rates:
-            cup_usd_rate = rates['USD']
-            print(f"✅ Tasa CUP/USD obtenida de API: {cup_usd_rate}")
-            return cup_usd_rate
+        if rates:
+            # Intentar diferentes nombres posibles para USD
+            usd_keys = ['USD', 'USDT', 'USDC', 'USD₮', 'DÓLAR', 'DOLLAR']
+            for key in usd_keys:
+                if key in rates:
+                    cup_usd_rate = rates[key]
+                    print(f"✅ Tasa CUP/USD obtenida de API: {cup_usd_rate}")
+                    return cup_usd_rate
         
         # Fallback si no se encuentra USD
         print("⚠️ No se encontró tasa USD en API, usando valor por defecto")
@@ -145,7 +163,7 @@ def get_cup_usd_rate():
         print(f"❌ Error obteniendo tasa CUP/USD: {e}")
         return 485.0
 
-# Función para obtener tasa CUP/EUR desde la API de ElToque
+# Función para obtener tasa CUP/EUR
 def get_cup_eur_rate():
     """
     Obtiene la tasa de cambio CUP/EUR desde la API de ElToque
@@ -154,10 +172,14 @@ def get_cup_eur_rate():
     try:
         rates = get_eltoque_rates()
         
-        if rates and 'EUR' in rates:
-            cup_eur_rate = rates['EUR']
-            print(f"✅ Tasa CUP/EUR obtenida de API: {cup_eur_rate}")
-            return cup_eur_rate
+        if rates:
+            # Intentar diferentes nombres posibles para EUR
+            eur_keys = ['EUR', 'EURO', '€']
+            for key in eur_keys:
+                if key in rates:
+                    cup_eur_rate = rates[key]
+                    print(f"✅ Tasa CUP/EUR obtenida de API: {cup_eur_rate}")
+                    return cup_eur_rate
         
         # Fallback si no se encuentra EUR
         print("⚠️ No se encontró tasa EUR en API, usando valor por defecto")
@@ -1049,57 +1071,34 @@ def show_complete_balance(call):
     )
 
 def show_current_rates(call_or_message):
-    """Muestra las tasas actuales de cambio con todos los detalles"""
-    # Obtener tasas
+    """Muestra las tasas actuales de cambio desde la API de ElToque"""
+    # Obtener tasas desde la API
     cup_usd_rate = get_cup_usd_rate()
-    
-    # Para mostrar también la tasa EUR que usamos para el cálculo
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(API_ENDPOINTS["eltoque"], headers=headers, timeout=5)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        all_text = soup.get_text()
-        
-        eur_rate = None
-        eur_pattern = r'1\s*EUR\s*[=≈]\s*([\d.,]+)\s*CUP'
-        match = re.search(eur_pattern, all_text, re.IGNORECASE)
-        if match:
-            eur_rate = float(match.group(1).replace(',', ''))
-    except:
-        eur_rate = 540.0  # Valor por defecto
-
-    eur_usd_rate = get_eur_usd_rate()
+    cup_eur_rate = get_cup_eur_rate()
     
     rates_text = f"""
-📈 *TASAS DE CAMBIO CALCULADAS*
+📈 *TASAS DE CAMBIO EN TIEMPO REAL*
 
-💶 *Tasa Base (ElToque):*
-• 1 EUR = {eur_rate:,.0f} CUP
-
-💱 *Tasa Internacional:*
-• 1 USD = {eur_usd_rate:.3f} EUR
-
-💵 *Tasa Calculada USD:*
+💵 *Tasa USD:*
 • 1 USD = {cup_usd_rate:,.0f} CUP
 • 1 PRC = {cup_usd_rate:,.0f} CUP
 
-📊 *Conversiones comunes:*
+💶 *Tasa EUR:*
+• 1 EUR = {cup_eur_rate:,.0f} CUP
+
+📊 *Conversiones comunes ProCoin:*
 • 10 PRC = {10 * cup_usd_rate:,.0f} CUP
 • 50 PRC = {50 * cup_usd_rate:,.0f} CUP  
 • 100 PRC = {100 * cup_usd_rate:,.0f} CUP
 
-🔢 *Cálculo:*
-{eur_rate:,.0f} CUP/EUR × {eur_usd_rate:.3f} EUR/USD = {cup_usd_rate:,.0f} CUP/USD
-
+🔗 *Fuente:* API Oficial ElToque
 📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
 
     if hasattr(call_or_message, 'message'):
         # Es un callback
         bot.edit_message_text(
             chat_id=call_or_message.message.chat.id,
-            message_id=call_or_message.message.message_id,
+            message_id=call_or_message.message_id,
             text=rates_text,
             parse_mode='Markdown',
             reply_markup=main_menu(call_or_message.message.chat.id)
