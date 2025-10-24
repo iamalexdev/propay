@@ -30,18 +30,18 @@ def home():
 def health():
     return "✅ OK", 200
 
-# Diccionarios para operaciones pendientes
-pending_deposits = {}
-pending_withdrawals = {}
-
 # Configuración de la API ElToque
 ELTOQUE_API_URL = "https://tasas.eltoque.com/v1/trmi"
 ELTOQUE_API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MTE0NzQzMSwianRpIjoiMTc4ZGIyZWYtNWIzNy00MzJhLTkwYTktNTczZDBiOGE2N2ViIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjY4ZjgyZjM1ZTkyYmU3N2VhMzAzODJhZiIsIm5iZiI6MTc2MTE0NzQzMSwiZXhwIjoxNzkyNjgzNDMxfQ.gTIXoSudOyo99vLLBap74_5UfdSRdOLluXekb0F1cPg"
 
+# =============================================================================
+# SISTEMA DE CACHÉ PARA TASAS - DEBE IR AL PRINCIPIO
+# =============================================================================
+
 # Variables globales para el caché
 rates_cache = None
 last_api_call = 0
-CACHE_DURATION = 2
+CACHE_DURATION = 2  # segundos (más de 1 para seguridad)
 
 def get_eltoque_rates_cached():
     """
@@ -61,6 +61,10 @@ def get_eltoque_rates_cached():
     last_api_call = current_time
     
     return rates_cache
+
+# =============================================================================
+# FUNCIONES DE API ELTOQUE - DEBEN IR DESPUÉS DEL CACHÉ
+# =============================================================================
 
 def get_eltoque_rates():
     """
@@ -183,6 +187,37 @@ def get_cup_eur_rate():
         print(f"❌ Error obteniendo tasa CUP/EUR: {e}")
         return 540.0
 
+# =============================================================================
+# EL RESTO DEL CÓDIGO (base de datos, handlers, etc.) VA DESPUÉS
+# =============================================================================
+
+# Diccionarios para operaciones pendientes
+pending_deposits = {}
+pending_withdrawals = {}
+
+# Función para enviar notificaciones al grupo
+def send_group_notification(message, photo_id=None):
+    try:
+        if photo_id:
+            bot.send_photo(
+                chat_id=GROUP_CHAT_ID,
+                photo=photo_id,
+                caption=message,
+                parse_mode='Markdown'
+            )
+        else:
+            bot.send_message(
+                chat_id=GROUP_CHAT_ID,
+                text=message,
+                parse_mode='Markdown'
+            )
+        print(f"✅ Notificación enviada al grupo {GROUP_CHAT_ID}")
+        return True
+    except Exception as e:
+        print(f"❌ Error enviando notificación: {e}")
+        return False
+
+# ... el resto de tu código (init_db, register_user, handlers, etc.) ...
 # Función para enviar notificaciones al grupo
 def send_group_notification(message, photo_id=None):
     try:
