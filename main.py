@@ -81,84 +81,91 @@ def get_eur_usd_rate():
     print(f"⚠️ Usando tasa EUR/USD por defecto: {default_rate}")
     return default_rate
 
-# Función para obtener tasa CUP/USD calculada desde el EURO
-def get_cup_usd_rate():
+# Función para obtener tasas de cambio desde la API de ElToque
+def get_eltoque_rates():
     """
-    Obtiene la tasa de cambio CUP/USD calculada desde el EURO de ElToque
-    Retorna: float o None si hay error
+    Obtiene las tasas de cambio desde la API oficial de ElToque
+    Retorna: dict con las tasas o None si hay error
     """
     try:
+        # Endpoint de la API de ElToque para tasas de cambio
+        api_url = "https://tasas.eltoque.com/v1/trmi?date_from=2025-10-24%2000%3A00%3A01&date_to=2025-10-24%2023%3A59%3A01"
+        
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
         }
-        response = requests.get(API_ENDPOINTS["eltoque"], headers=headers, timeout=10)
+        
+        response = requests.get(api_url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
-        all_text = soup.get_text()
+        data = response.json()
         
-        # Estrategia 1: Buscar específicamente el EURO
-        eur_patterns = [
-            r'1\s*EUR\s*[=≈]\s*([\d.,]+)\s*CUP',
-            r'EUR\s*[=:]\s*([\d.,]+)\s*CUP',
-            r'EUR\s*([\d.,]+)\s*CUP',
-            r'([\d.,]+)\s*CUP\s*por\s*EUR',
-            r'EUR\/CUP[^\d]*([\d.,]+)',
-            r'€\s*[=:]\s*([\d.,]+)\s*CUP'
-        ]
+        # Procesar la respuesta según la estructura de la API
+        rates = {}
         
-        eur_rate = None
+        # Buscar las tasas en la estructura JSON
+        if 'data' in data:
+            for rate_data in data['data']:
+                if 'currency' in rate_data and 'price' in rate_data:
+                    currency = rate_data['currency'].upper()
+                    price = float(rate_data['price'])
+                    rates[currency] = price
         
-        for pattern in eur_patterns:
-            match = re.search(pattern, all_text, re.IGNORECASE)
-            if match:
-                rate_str = match.group(1).replace(',', '')
-                try:
-                    rate = float(rate_str)
-                    if 10 <= rate <= 1000:  # Rango razonable para EUR
-                        eur_rate = rate
-                        print(f"✅ Tasa EUR obtenida de ElToque: {eur_rate} CUP/EUR")
-                        break
-                except ValueError:
-                    continue
-        
-        if eur_rate is None:
-            # Estrategia 2: Buscar cualquier número en el rango del EURO
-            eur_matches = re.findall(r'\b(5[0-9]{2})\b', all_text)
-            for match in eur_matches:
-                try:
-                    rate = float(match)
-                    if 10 <= rate <= 1000:  # Rango típico del EUR
-                        eur_rate = rate
-                        print(f"✅ Tasa EUR aproximada: {eur_rate} CUP/EUR")
-                        break
-                except ValueError:
-                    continue
-        
-        if eur_rate is None:
-            # Fallback: si no encontramos EUR, usar valor por defecto
-            eur_rate = 540.0
-            print(f"⚠️ No se pudo obtener tasa EUR, usando valor por defecto: {eur_rate}")
-        
-        # Obtener tasa EUR/USD
-        eur_usd_rate = get_eur_usd_rate()
-        
-        # Calcular CUP/USD: (CUP/EUR) × (EUR/USD)
-        cup_usd_rate = eur_rate / eur_usd_rate
-        
-        print(f"💰 Cálculo: {eur_rate} CUP/EUR / {eur_usd_rate:.4f} EUR/USD = {cup_usd_rate:.2f} CUP/USD")
-        
-        # Ajustar a múltiplo de 5 para hacerlo más realista
-        
-        print(f"✅ Tasa CUP/USD calculada: {cup_usd_rate} CUP/USD")
-        return cup_usd_rate
+        print(f"✅ Tasas obtenidas de API ElToque: {rates}")
+        return rates
         
     except requests.RequestException as e:
-        print(f"❌ Error de conexión: {e}")
-        return 485.0
+        print(f"❌ Error de conexión con API ElToque: {e}")
+        return None
     except Exception as e:
-        print(f"❌ Error inesperado: {e}")
+        print(f"❌ Error procesando API ElToque: {e}")
+        return None
+
+# Función para obtener tasa CUP/USD desde la API de ElToque
+def get_cup_usd_rate():
+    """
+    Obtiene la tasa de cambio CUP/USD desde la API de ElToque
+    Retorna: float o valor por defecto si hay error
+    """
+    try:
+        rates = get_eltoque_rates()
+        
+        if rates and 'USD' in rates:
+            cup_usd_rate = rates['USD']
+            print(f"✅ Tasa CUP/USD obtenida de API: {cup_usd_rate}")
+            return cup_usd_rate
+        
+        # Fallback si no se encuentra USD
+        print("⚠️ No se encontró tasa USD en API, usando valor por defecto")
         return 485.0
+        
+    except Exception as e:
+        print(f"❌ Error obteniendo tasa CUP/USD: {e}")
+        return 485.0
+
+# Función para obtener tasa CUP/EUR desde la API de ElToque
+def get_cup_eur_rate():
+    """
+    Obtiene la tasa de cambio CUP/EUR desde la API de ElToque
+    Retorna: float o valor por defecto si hay error
+    """
+    try:
+        rates = get_eltoque_rates()
+        
+        if rates and 'EUR' in rates:
+            cup_eur_rate = rates['EUR']
+            print(f"✅ Tasa CUP/EUR obtenida de API: {cup_eur_rate}")
+            return cup_eur_rate
+        
+        # Fallback si no se encuentra EUR
+        print("⚠️ No se encontró tasa EUR en API, usando valor por defecto")
+        return 540.0
+        
+    except Exception as e:
+        print(f"❌ Error obteniendo tasa CUP/EUR: {e}")
+        return 540.0
 
 # Función para enviar notificaciones al grupo
 def send_group_notification(message, photo_id=None):
