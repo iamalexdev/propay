@@ -37,7 +37,7 @@ pending_withdrawals = {}
 # Configuración de la API ElToque
 ELTOQUE_API_URL = "https://tasas.eltoque.com/v1/trmi"
 # Necesitarás obtener un token válido de ElToque
-ELTOQUE_API_TOKEN = "tu_token_aqui"  # Reemplaza con tu token real
+ELTOQUE_API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MTE0NzQzMSwianRpIjoiMTc4ZGIyZWYtNWIzNy00MzJhLTkwYTktNTczZDBiOGE2N2ViIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjY4ZjgyZjM1ZTkyYmU3N2VhMzAzODJhZiIsIm5iZiI6MTc2MTE0NzQzMSwiZXhwIjoxNzkyNjgzNDMxfQ.gTIXoSudOyo99vLLBap74_5UfdSRdOLluXekb0F1cPg"  # Reemplaza con tu token real
 
 # Función mejorada para obtener tasas de cambio
 def get_eltoque_rates():
@@ -174,7 +174,7 @@ def get_cup_eur_rate():
         
         if rates:
             # Intentar diferentes nombres posibles para EUR
-            eur_keys = ['EUR', 'EURO', '€']
+            eur_keys = ['EUR', 'ECU', '€']
             for key in eur_keys:
                 if key in rates:
                     cup_eur_rate = rates[key]
