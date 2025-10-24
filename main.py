@@ -10,8 +10,8 @@ import os
 import requests
 import json
 from bs4 import BeautifulSoup
-from flask import Flask, render_template
 import threading
+import traceback
 
 # Configuración
 TOKEN = "8400947960:AAGGXHezQbmUqk6AOpgT1GqMLaF-rMvVp9Y"
@@ -19,23 +19,12 @@ GROUP_CHAT_ID = "-4932107704"
 ADMIN_ID = 1853800972
 bot = telebot.TeleBot(TOKEN)
 
-# Crear app Flask para Render
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 CubaWallet ProCoin Bot está funcionando"
-
-@app.route('/health')
-def health():
-    return "✅ OK", 200
-
 # Configuración de la API ElToque
 ELTOQUE_API_URL = "https://tasas.eltoque.com/v1/trmi"
 ELTOQUE_API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MTE0NzQzMSwianRpIjoiMTc4ZGIyZWYtNWIzNy00MzJhLTkwYTktNTczZDBiOGE2N2ViIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjY4ZjgyZjM1ZTkyYmU3N2VhMzAzODJhZiIsIm5iZiI6MTc2MTE0NzQzMSwiZXhwIjoxNzkyNjgzNDMxfQ.gTIXoSudOyo99vLLBap74_5UfdSRdOLluXekb0F1cPg"
 
 # =============================================================================
-# SISTEMA DE CACHÉ PARA TASAS - DEBE IR AL PRINCIPIO
+# SISTEMA DE CACHÉ PARA TASAS
 # =============================================================================
 
 # Variables globales para el caché
@@ -52,18 +41,31 @@ def get_eltoque_rates_cached():
     current_time = time.time()
     
     # Si tenemos datos en caché y no han pasado más de CACHE_DURATION segundos, usamos el caché
-    if rates_cache and (current_time - last_api_call) < CACHE_DURATION:
+    if rates_cache is not None and (current_time - last_api_call) < CACHE_DURATION:
         print("✅ Usando tasas en caché")
+        send_group_notification("🔄 *Sistema Tasas:* Usando tasas en caché")
         return rates_cache
     
+    print("🔄 Haciendo nueva petición a la API...")
+    send_group_notification("🔄 *Sistema Tasas:* Haciendo nueva petición a API ElToque...")
+    
     # Si no, hacemos la petición a la API
-    rates_cache = get_eltoque_rates()
-    last_api_call = current_time
+    new_rates = get_eltoque_rates()
+    
+    # Solo actualizar el caché si obtuvimos datos
+    if new_rates is not None:
+        rates_cache = new_rates
+        last_api_call = current_time
+        print(f"✅ Caché actualizado con {len(new_rates)} tasas")
+        send_group_notification(f"✅ *Sistema Tasas:* Caché actualizado con {len(new_rates)} tasas")
+    else:
+        print("⚠️ No se pudieron obtener nuevas tasas, manteniendo caché anterior")
+        send_group_notification("⚠️ *Sistema Tasas:* No se pudieron obtener nuevas tasas, usando caché anterior")
     
     return rates_cache
 
 # =============================================================================
-# FUNCIONES DE API ELTOQUE - DEBEN IR DESPUÉS DEL CACHÉ
+# FUNCIONES DE API ELTOQUE
 # =============================================================================
 
 def get_eltoque_rates():
@@ -89,28 +91,36 @@ def get_eltoque_rates():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        print("🔗 Haciendo petición a API ElToque...")
+        print(f"🔗 Solicitando: {ELTOQUE_API_URL}")
+        print(f"📅 Con parámetros: {params}")
         
         response = requests.get(ELTOQUE_API_URL, params=params, headers=headers, timeout=15)
         
         print(f"📡 Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            print(f"❌ Error HTTP {response.status_code}: {response.text}")
+            error_msg = f"❌ Error HTTP {response.status_code}: {response.text}"
+            print(error_msg)
+            send_group_notification(f"❌ *Error API:* {error_msg}")
             return None
             
         data = response.json()
-        print("✅ Respuesta API recibida exitosamente")
+        print(f"✅ Respuesta recibida, tipo: {type(data)}")
         
         # Procesar la estructura real de la respuesta
         rates = {}
         
-        if 'tasas' in data:
+        if isinstance(data, dict) and 'tasas' in data:
             # Extraer las tasas del campo 'tasas'
             tasas_data = data['tasas']
+            print(f"📊 Campo 'tasas' encontrado: {tasas_data}")
+            
             for currency, rate in tasas_data.items():
-                rates[currency] = float(rate)
-                print(f"  - {currency}: {rate}")
+                try:
+                    rates[currency] = float(rate)
+                    print(f"  ✅ {currency}: {rate}")
+                except (ValueError, TypeError) as e:
+                    print(f"  ❌ Error convirtiendo {currency}: {rate} - {e}")
         
         # Mostrar información de fecha/hora
         if 'date' in data:
@@ -118,23 +128,45 @@ def get_eltoque_rates():
         if 'hour' in data:
             print(f"🕒 Hora: {data['hour']}:{data.get('minutes', '00')}:{data.get('seconds', '00')}")
         
-        print(f"💰 Total tasas obtenidas: {len(rates)}")
+        print(f"💰 Total tasas procesadas: {len(rates)}")
+        
+        if not rates:
+            error_msg = "❌ No se pudieron extraer tasas de la respuesta"
+            print(error_msg)
+            send_group_notification(f"❌ *Error API:* {error_msg}")
+            return None
+            
+        # Enviar resumen de tasas al grupo
+        tasas_resumen = ", ".join([f"{k}: {v}" for k, v in rates.items()])
+        send_group_notification(f"📈 *Tasas obtenidas:* {tasas_resumen}")
+            
         return rates
         
     except requests.exceptions.Timeout:
-        print("❌ Timeout conectando a API ElToque")
+        error_msg = "❌ Timeout conectando a API ElToque"
+        print(error_msg)
+        send_group_notification(f"❌ *Error API:* {error_msg}")
         return None
     except requests.exceptions.ConnectionError:
-        print("❌ Error de conexión con API ElToque")
+        error_msg = "❌ Error de conexión con API ElToque"
+        print(error_msg)
+        send_group_notification(f"❌ *Error API:* {error_msg}")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"❌ Error en solicitud a API ElToque: {e}")
+        error_msg = f"❌ Error en solicitud a API ElToque: {e}"
+        print(error_msg)
+        send_group_notification(f"❌ *Error API:* {error_msg}")
         return None
     except ValueError as e:
-        print(f"❌ Error parseando JSON de API ElToque: {e}")
+        error_msg = f"❌ Error parseando JSON de API ElToque: {e}"
+        print(error_msg)
+        send_group_notification(f"❌ *Error API:* {error_msg}")
         return None
     except Exception as e:
-        print(f"❌ Error inesperado en API ElToque: {e}")
+        error_msg = f"❌ Error inesperado en API ElToque: {e}"
+        print(error_msg)
+        traceback.print_exc()
+        send_group_notification(f"❌ *Error API:* {error_msg}")
         return None
 
 def get_cup_usd_rate():
@@ -157,11 +189,15 @@ def get_cup_usd_rate():
                 return cup_usd_rate
         
         # Fallback si no se encuentra USD
-        print("⚠️ No se encontró tasa USD, usando valor por defecto: 490.0")
+        error_msg = "⚠️ No se encontró tasa USD, usando valor por defecto: 490.0"
+        print(error_msg)
+        send_group_notification(f"⚠️ *Sistema Tasas:* {error_msg}")
         return 490.0
         
     except Exception as e:
-        print(f"❌ Error obteniendo tasa CUP/USD: {e}")
+        error_msg = f"❌ Error obteniendo tasa CUP/USD: {e}"
+        print(error_msg)
+        send_group_notification(f"❌ *Error Tasas:* {error_msg}")
         return 490.0
 
 def get_cup_eur_rate():
@@ -180,44 +216,25 @@ def get_cup_eur_rate():
                 return cup_eur_rate
         
         # Fallback si no se encuentra EUR
-        print("⚠️ No se encontró tasa EUR, usando valor por defecto: 540.0")
+        error_msg = "⚠️ No se encontró tasa EUR, usando valor por defecto: 540.0"
+        print(error_msg)
+        send_group_notification(f"⚠️ *Sistema Tasas:* {error_msg}")
         return 540.0
         
     except Exception as e:
-        print(f"❌ Error obteniendo tasa CUP/EUR: {e}")
+        error_msg = f"❌ Error obteniendo tasa CUP/EUR: {e}"
+        print(error_msg)
+        send_group_notification(f"❌ *Error Tasas:* {error_msg}")
         return 540.0
 
 # =============================================================================
-# EL RESTO DEL CÓDIGO (base de datos, handlers, etc.) VA DESPUÉS
+# FUNCIONES PRINCIPALES
 # =============================================================================
 
 # Diccionarios para operaciones pendientes
 pending_deposits = {}
 pending_withdrawals = {}
 
-# Función para enviar notificaciones al grupo
-def send_group_notification(message, photo_id=None):
-    try:
-        if photo_id:
-            bot.send_photo(
-                chat_id=GROUP_CHAT_ID,
-                photo=photo_id,
-                caption=message,
-                parse_mode='Markdown'
-            )
-        else:
-            bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text=message,
-                parse_mode='Markdown'
-            )
-        print(f"✅ Notificación enviada al grupo {GROUP_CHAT_ID}")
-        return True
-    except Exception as e:
-        print(f"❌ Error enviando notificación: {e}")
-        return False
-
-# ... el resto de tu código (init_db, register_user, handlers, etc.) ...
 # Función para enviar notificaciones al grupo
 def send_group_notification(message, photo_id=None):
     try:
@@ -330,6 +347,7 @@ def clear_database():
         return True
     except Exception as e:
         print(f"Error limpiando base de datos: {e}")
+        send_group_notification(f"❌ *Error BD:* Error limpiando base de datos: {e}")
         return False
 
 # Función para escapar texto para Markdown
@@ -365,7 +383,6 @@ def register_user(user_id, username, first_name):
         ''', (user_id, username, first_name, wallet_address, 0.0))
         conn.commit()
         
-        # CORREGIDO: Escape correcto del signo de exclamación
         notification_text = f"""
 🆕 *NUEVO USUARIO REGISTRADO* 🆕
 
@@ -455,7 +472,9 @@ def main_menu(chat_id):
     
     return markup
 
+# =============================================================================
 # COMANDOS DE ADMINISTRADOR
+# =============================================================================
 
 @bot.message_handler(commands=['limpiar'])
 def clear_database_command(message):
@@ -582,15 +601,15 @@ def show_stats(message):
     total_transactions = cursor.fetchone()[0]
     
     # Volumen total en ProCoin
-    cursor.execute('SELECT SUM(amount) FROM transactions WHERE status = \"completed\"')
+    cursor.execute('SELECT SUM(amount) FROM transactions WHERE status = "completed"')
     total_volume_prc = cursor.fetchone()[0] or 0
     
     # Depósitos pendientes
-    cursor.execute('SELECT COUNT(*) FROM deposits WHERE status = \"pending\"')
+    cursor.execute('SELECT COUNT(*) FROM deposits WHERE status = "pending"')
     pending_deposits_count = cursor.fetchone()[0]
     
     # Retiros pendientes
-    cursor.execute('SELECT COUNT(*) FROM withdrawals WHERE status = \"pending\"')
+    cursor.execute('SELECT COUNT(*) FROM withdrawals WHERE status = "pending"')
     pending_withdrawals_count = cursor.fetchone()[0]
     
     conn.close()
@@ -616,7 +635,47 @@ def show_stats(message):
         parse_mode='Markdown'
     )
 
+@bot.message_handler(commands=['debug_tasas'])
+def debug_tasas_command(message):
+    """Comando para debuggear las tasas"""
+    user_id = message.from_user.id
+    
+    if not is_admin(user_id):
+        bot.reply_to(message, "❌ *Comando solo para administradores*", parse_mode='Markdown')
+        return
+        
+    # Testear API
+    bot.reply_to(message, "🧪 Probando API ElToque...")
+    api_works = test_eltoque_api()
+    
+    # Testear caché
+    bot.reply_to(message, "🧪 Probando sistema de caché...")
+    cache_works = test_cache_system()
+    
+    # Obtener tasas actuales
+    bot.reply_to(message, "🧪 Obteniendo tasas actuales...")
+    all_rates = get_eltoque_rates_cached()
+    
+    debug_text = f"""
+🔧 *DEBUG TASAS*
+
+📡 *Estado API:* {'✅ Funciona' if api_works else '❌ Falló'}
+💾 *Estado Caché:* {'✅ Funciona' if cache_works else '❌ Falló'}
+💰 *Tasas obtenidas:* {len(all_rates) if all_rates else 0}
+
+📊 *Contenido de tasas:*
+{all_rates}
+
+💵 *Tasa USD:* {get_cup_usd_rate()}
+💶 *Tasa EUR:* {get_cup_eur_rate()}
+"""
+    
+    bot.reply_to(message, debug_text, parse_mode='Markdown')
+
+# =============================================================================
 # COMANDO START
+# =============================================================================
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -646,7 +705,10 @@ def send_welcome(message):
         reply_markup=main_menu(message.chat.id)
     )
 
+# =============================================================================
 # MANEJADOR DE CALLBACKS
+# =============================================================================
+
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     user_id = call.from_user.id
@@ -795,7 +857,10 @@ Actualmente 1 PRC = *{cup_rate:,.0f} CUP*
             parse_mode='Markdown'
         )
 
+# =============================================================================
 # FUNCIONES PARA DEPÓSITOS CUP
+# =============================================================================
+
 def start_cup_deposit(call, method):
     cup_rate = get_cup_usd_rate()
     
@@ -837,7 +902,6 @@ def process_cup_deposit_amount(message, method):
         }
         
         if method == "transfermovil":
-            # CORREGIDO: Eliminados los escapes inválidos
             payment_text = f"""
 📱 *INSTRUCCIONES PARA PAGO POR TRANSFERMÓVIL*
 
@@ -866,7 +930,6 @@ def process_cup_deposit_amount(message, method):
 • La verificación puede tomar 5-15 minutos"""
         
         else:  # enzona
-            # CORREGIDO: Eliminados los escapes inválidos
             payment_text = f"""
 🔵 *INSTRUCCIONES PARA PAGO POR ENZONA*
 
@@ -915,7 +978,10 @@ def process_cup_deposit_amount(message, method):
             reply_markup=main_menu(message.chat.id)
         )
 
+# =============================================================================
 # FUNCIONES PARA RETIROS CUP
+# =============================================================================
+
 def start_cup_withdrawal(call):
     user_id = call.from_user.id
     user_info = get_user_info(user_id)
@@ -1076,7 +1142,10 @@ def process_cup_withdraw_card(message):
     # Limpiar retiro pendiente
     del pending_withdrawals[user_id]
 
+# =============================================================================
 # FUNCIONES DE INFORMACIÓN
+# =============================================================================
+
 def show_complete_balance(call):
     user_id = call.from_user.id
     user_info = get_user_info(user_id)
@@ -1105,8 +1174,12 @@ def show_complete_balance(call):
 def show_current_rates(call_or_message):
     """Muestra TODAS las tasas actuales de cambio desde la API de ElToque"""
     try:
+        print("🔍 Iniciando obtención de tasas...")
+        send_group_notification("🔍 *Solicitud Tasas:* Usuario solicitando tasas actuales")
+        
         # Obtener todas las tasas desde el caché
         all_rates = get_eltoque_rates_cached()
+        print(f"📊 Tasas obtenidas: {all_rates}")
         
         if not all_rates:
             # Si no hay tasas, usar valores por defecto
@@ -1118,14 +1191,16 @@ def show_current_rates(call_or_message):
                 'BTC': 490,
                 'TRX': 180
             }
-            print("⚠️ Usando tasas por defecto")
+            print("⚠️ No se obtuvieron tasas, usando valores por defecto")
+            send_group_notification("⚠️ *Sistema Tasas:* Usando tasas por defecto")
 
         # Determinar la tasa principal para ProCoin (USD por defecto)
         main_rate = all_rates.get('USD') 
         if main_rate is None:
             main_rate = all_rates.get('USDT_TRC20', 490.0)
+        print(f"💰 Tasa principal (USD): {main_rate}")
 
-        # CORREGIDO: Usando formato simple sin escapes problemáticos
+        # Construir el mensaje principal
         rates_text = f"""
 📈 *TODAS LAS TASAS DE CAMBIO*
 
@@ -1169,6 +1244,9 @@ def show_current_rates(call_or_message):
 
         rates_text += f"\n🔄 Actualizado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
+        print("✅ Mensaje de tasas construido, enviando...")
+        send_group_notification("✅ *Sistema Tasas:* Tasas enviadas al usuario correctamente")
+        
         # Envío del mensaje con Markdown normal
         if hasattr(call_or_message, 'message'):
             # Es un CallbackQuery (desde botón inline)
@@ -1194,6 +1272,9 @@ def show_current_rates(call_or_message):
             
     except Exception as e:
         print(f"❌ Error en show_current_rates: {e}")
+        traceback.print_exc()
+        send_group_notification(f"❌ *Error Tasas:* Error en show_current_rates: {e}")
+        
         error_text = "❌ *Error obteniendo tasas*\n\nPor favor, intenta nuevamente en unos momentos."
         
         if hasattr(call_or_message, 'message'):
@@ -1215,7 +1296,10 @@ def show_current_rates(call_or_message):
                 reply_markup=main_menu(chat_id)
             )
 
+# =============================================================================
 # MANEJADOR DE CAPTURAS DE PANTALLA
+# =============================================================================
+
 @bot.message_handler(content_types=['photo'])
 def handle_screenshot(message):
     user_id = message.from_user.id
@@ -1273,7 +1357,10 @@ def handle_screenshot(message):
         
         del pending_deposits[user_id]
 
+# =============================================================================
 # FUNCIONES DE TRANSFERENCIA ENTRE USUARIOS
+# =============================================================================
+
 def process_recipient(message):
     recipient_address = message.text.strip()
     user_id = message.from_user.id
@@ -1428,7 +1515,10 @@ def cancel_send(call):
         reply_markup=main_menu(call.message.chat.id)
     )
 
+# =============================================================================
 # COMANDO PARA VER SALDO
+# =============================================================================
+
 @bot.message_handler(commands=['saldo'])
 def show_balance_command(message):
     user_id = message.from_user.id
@@ -1443,9 +1533,14 @@ def show_balance_command(message):
             reply_markup=main_menu(message.chat.id)
         )
 
+# =============================================================================
+# FUNCIONES DE DEBUG Y TESTING
+# =============================================================================
+
 def test_cache_system():
     """Prueba el sistema de caché"""
     print("🧪 Probando sistema de caché...")
+    send_group_notification("🧪 *Debug:* Probando sistema de caché...")
     
     # Primera llamada - debería hacer petición
     start_time = time.time()
@@ -1461,11 +1556,21 @@ def test_cache_system():
     print(f"⏱️ Tiempo segunda llamada: {time2:.3f}s")
     print(f"✅ Caché funcionando: {time2 < time1 and time2 < 0.01}")
     
+    debug_msg = f"""
+🧪 *RESULTADO TEST CACHÉ:*
+• Tiempo primera llamada: {time1:.3f}s
+• Tiempo segunda llamada: {time2:.3f}s
+• Caché funcionando: {'✅ Sí' if (time2 < time1 and time2 < 0.01) else '❌ No'}
+• Tasas obtenidas: {len(rates1) if rates1 else 0}"""
+    
+    send_group_notification(debug_msg)
+    
     return rates1 is not None
 
 def test_eltoque_api():
     """Función para probar la conexión con la API de ElToque"""
     print("🧪 Probando conexión con API ElToque...")
+    send_group_notification("🧪 *Debug:* Probando conexión con API ElToque...")
     
     try:
         # Formatear fechas para hoy
@@ -1486,7 +1591,7 @@ def test_eltoque_api():
         
         print(f"🔗 URL: {ELTOQUE_API_URL}")
         print(f"📅 Parámetros: {params}")
-        print(f"🔑 Token: {ELTOQUE_API_TOKEN[:20]}...")
+        print(f"🔑 Token (primeros 20 chars): {ELTOQUE_API_TOKEN[:20]}...")
         
         response = requests.get(ELTOQUE_API_URL, params=params, headers=headers, timeout=15)
         
@@ -1495,31 +1600,68 @@ def test_eltoque_api():
         if response.status_code == 200:
             data = response.json()
             print("✅ API funciona correctamente")
-            print(f"📊 Datos recibidos: {data}")
+            print(f"📊 Estructura de datos: {list(data.keys()) if isinstance(data, dict) else 'No es dict'}")
+            
+            if 'tasas' in data:
+                print(f"💰 Tasas disponibles: {data['tasas']}")
+                tasas_resumen = ", ".join([f"{k}: {v}" for k, v in data['tasas'].items()])
+                debug_msg = f"""
+✅ *RESULTADO TEST API:*
+• Status: 200 OK
+• Estructura: {list(data.keys())}
+• Tasas: {tasas_resumen}"""
+            else:
+                print("❌ No se encontró el campo 'tasas' en la respuesta")
+                debug_msg = f"""
+❌ *RESULTADO TEST API:*
+• Status: 200 OK
+• Error: No se encontró campo 'tasas'
+• Estructura: {list(data.keys()) if isinstance(data, dict) else type(data)}"""
+                
+            send_group_notification(debug_msg)
             return True
         else:
-            print(f"❌ Error API: {response.status_code} - {response.text}")
+            print(f"❌ Error API: {response.status_code}")
+            print(f"📄 Respuesta: {response.text}")
+            debug_msg = f"""
+❌ *RESULTADO TEST API:*
+• Status: {response.status_code}
+• Error: {response.text}"""
+            send_group_notification(debug_msg)
             return False
             
     except Exception as e:
         print(f"❌ Error en test: {e}")
+        traceback.print_exc()
+        debug_msg = f"""
+❌ *ERROR TEST API:*
+• Excepción: {e}"""
+        send_group_notification(debug_msg)
         return False
 
+# =============================================================================
 # INICIALIZACIÓN Y EJECUCIÓN
+# =============================================================================
+
 def run_bot():
     """Ejecuta el bot de Telegram en un hilo separado"""
     print("🧠 Inicializando base de datos...")
+    send_group_notification("🧠 *Sistema:* Inicializando base de datos...")
     init_db()
     
     # Probar la API de ElToque y el caché al inicio
     print("🧪 Probando API ElToque y sistema de caché...")
+    send_group_notification("🧪 *Sistema:* Probando API ElToque y sistema de caché...")
+    
     api_works = test_eltoque_api()
     cache_works = test_cache_system()
     
     if api_works and cache_works:
         print("✅ API ElToque y caché funcionando correctamente")
+        send_group_notification("✅ *Sistema:* API ElToque y caché funcionando correctamente")
     else:
         print("❌ Problemas con API o caché, usando tasas por defecto")
+        send_group_notification("❌ *Sistema:* Problemas con API o caché, usando tasas por defecto")
     
     print("🤖 Iniciando bot ProCoin...")
     print(f"👑 Administrador: {ADMIN_ID}")
@@ -1530,9 +1672,13 @@ def run_bot():
     send_group_notification(test_msg)
     
     try:
+        print("🔄 Iniciando polling del bot...")
+        send_group_notification("🔄 *Sistema:* Iniciando polling del bot...")
         bot.polling(none_stop=True)
     except Exception as e:
-        print(f"Error en el bot: {e}")
+        error_msg = f"❌ Error en el bot: {e}"
+        print(error_msg)
+        send_group_notification(f"❌ *Error Sistema:* {error_msg}")
         time.sleep(10)
         run_bot()
 
@@ -1542,6 +1688,10 @@ if __name__ == "__main__":
     bot_thread.daemon = True
     bot_thread.start()
     
-    # Iniciar el servidor web para Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    # Mantener el script principal ejecutándose
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("👋 Deteniendo bot...")
+        send_group_notification("👋 *Sistema:* Bot detenido por el usuario")
