@@ -622,12 +622,12 @@ def handle_callback(call):
 `{user_info[4]}`
 
 📋 *Instrucciones:*
-1\. Comparte esta dirección con quien te enviará ProCoin
-2\. El remitente debe usar la opción *\"Enviar ProCoin\"*
-3\. Ingresa tu dirección única mostrada arriba
-4\. ¡Recibirás los ProCoin instantáneamente\!
+1. Comparte esta dirección con quien te enviará ProCoin
+2. El remitente debe usar la opción *"Enviar ProCoin"*
+3. Ingresa tu dirección única mostrada arriba
+4. ¡Recibirás los ProCoin instantáneamente!
 
-💡 *Consejo:* Copia tu dirección haciendo clic en ella\."""
+💡 *Consejo:* Copia tu dirección haciendo clic en ella."""
         
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -678,7 +678,10 @@ Actualmente 1 PRC = *{cup_rate:,.0f} CUP*
         show_complete_balance(call)
     
     elif call.data == "check_rates":
+        # LLAMADA CORREGIDA - usar call en lugar de call.message
         show_current_rates(call)
+    
+    # ... resto del código del callback handler permanece igual
     
     elif call.data == "deposit_transfermovil":
         start_cup_deposit(call, "transfermovil")
