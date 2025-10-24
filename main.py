@@ -1094,22 +1094,26 @@ def show_current_rates(call_or_message):
 🔗 *Fuente:* API Oficial ElToque
 📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
 
+        # Si es un callback, editamos el mensaje existente
         if hasattr(call_or_message, 'message'):
-            # Es un callback
+            # Es un callback (CallbackQuery)
+            chat_id = call_or_message.message.chat.id
+            message_id = call_or_message.message.message_id
             bot.edit_message_text(
-                chat_id=call_or_message.message.chat.id,
-                message_id=call_or_message.message_id,
+                chat_id=chat_id,
+                message_id=message_id,
                 text=rates_text,
                 parse_mode='Markdown',
-                reply_markup=main_menu(call_or_message.message.chat.id)
+                reply_markup=main_menu(chat_id)
             )
         else:
-            # Es un mensaje
+            # Es un mensaje (Message)
+            chat_id = call_or_message.chat.id
             bot.send_message(
-                call_or_message.chat.id,
+                chat_id,
                 rates_text,
                 parse_mode='Markdown',
-                reply_markup=main_menu(call_or_message.chat.id)
+                reply_markup=main_menu(chat_id)
             )
             
     except Exception as e:
@@ -1117,21 +1121,23 @@ def show_current_rates(call_or_message):
         error_text = "❌ *Error obteniendo tasas*\n\nPor favor, intenta nuevamente en unos momentos."
         
         if hasattr(call_or_message, 'message'):
+            chat_id = call_or_message.message.chat.id
+            message_id = call_or_message.message.message_id
             bot.edit_message_text(
-                chat_id=call_or_message.message.chat.id,
-                message_id=call_or_message.message_id,
+                chat_id=chat_id,
+                message_id=message_id,
                 text=error_text,
                 parse_mode='Markdown',
-                reply_markup=main_menu(call_or_message.message.chat.id)
+                reply_markup=main_menu(chat_id)
             )
         else:
+            chat_id = call_or_message.chat.id
             bot.send_message(
-                call_or_message.chat.id,
+                chat_id,
                 error_text,
                 parse_mode='Markdown',
-                reply_markup=main_menu(call_or_message.chat.id)
+                reply_markup=main_menu(chat_id)
             )
-
 
 @bot.message_handler(commands=['tasas'])
 def show_rates_command(message):
