@@ -198,7 +198,7 @@ def get_cup_usd_rate():
         error_msg = f"❌ Error obteniendo tasa CUP/USD: {e}"
         print(error_msg)
         send_group_notification(f"❌ *Error Tasas:* {error_msg}")
-        return 490.0
+        return 10000
 
 def get_cup_eur_rate():
     """
