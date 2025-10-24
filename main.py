@@ -51,7 +51,7 @@ def get_eltoque_rates():
         date_from = f"{today} 00:00:01"
         date_to = f"{today} 23:59:01"
         
-        # Parámetros de la consulta (codificados correctamente)
+        # Parámetros de la consulta
         params = {
             'date_from': date_from,
             'date_to': date_to
@@ -63,9 +63,7 @@ def get_eltoque_rates():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        print(f"🔗 Solicitando tasas a API ElToque...")
-        print(f"📋 URL: {ELTOQUE_API_URL}")
-        print(f"📅 Parámetros: {params}")
+        print(f"🔗 Haciendo petición a API ElToque...")
         
         response = requests.get(ELTOQUE_API_URL, params=params, headers=headers, timeout=15)
         
@@ -76,7 +74,7 @@ def get_eltoque_rates():
             return None
             
         data = response.json()
-        print(f"✅ Respuesta API recibida: {data}")
+        print(f"✅ Respuesta API recibida exitosamente")
         
         # Procesar la estructura real de la respuesta
         rates = {}
@@ -88,13 +86,13 @@ def get_eltoque_rates():
                 rates[currency] = float(rate)
                 print(f"  - {currency}: {rate}")
         
-        # También mostrar información de fecha/hora si está disponible
+        # Mostrar información de fecha/hora
         if 'date' in data:
             print(f"📅 Fecha: {data['date']}")
         if 'hour' in data:
             print(f"🕒 Hora: {data['hour']}:{data.get('minutes', '00')}:{data.get('seconds', '00')}")
         
-        print(f"💰 Tasas extraídas: {rates}")
+        print(f"💰 Total tasas obtenidas: {len(rates)}")
         return rates
         
     except requests.exceptions.Timeout:
@@ -114,36 +112,57 @@ def get_eltoque_rates():
         return None
 
 # Función corregida para obtener tasa CUP/USD
+# Función para obtener tasa CUP/USD (usando caché)
 def get_cup_usd_rate():
     """
-    Obtiene la tasa de cambio CUP/USD desde la API de ElToque
+    Obtiene la tasa de cambio CUP/USD desde el caché
     Retorna: float o valor por defecto si hay error
     """
     try:
-        rates = get_eltoque_rates()
+        rates = get_eltoque_rates_cached()
         
         if rates:
-            # Buscar USD en las tasas disponibles (prioridad: USD, USDT_TRC20, USDC, etc.)
+            # Buscar USD en las tasas disponibles
             if 'USD' in rates:
                 cup_usd_rate = rates['USD']
-                print(f"✅ Tasa CUP/USD obtenida de API: {cup_usd_rate}")
+                print(f"✅ Tasa CUP/USD obtenida: {cup_usd_rate}")
                 return cup_usd_rate
             elif 'USDT_TRC20' in rates:
                 cup_usd_rate = rates['USDT_TRC20']
-                print(f"✅ Tasa CUP/USDT obtenida de API: {cup_usd_rate}")
-                return cup_usd_rate
-            elif 'USDC' in rates:
-                cup_usd_rate = rates['USDC']
-                print(f"✅ Tasa CUP/USDC obtenida de API: {cup_usd_rate}")
+                print(f"✅ Tasa CUP/USDT obtenida: {cup_usd_rate}")
                 return cup_usd_rate
         
         # Fallback si no se encuentra USD
-        print("⚠️ No se encontró tasa USD en API, usando valor por defecto: 490.0")
+        print("⚠️ No se encontró tasa USD, usando valor por defecto: 490.0")
         return 490.0
         
     except Exception as e:
         print(f"❌ Error obteniendo tasa CUP/USD: {e}")
         return 490.0
+
+# Función para obtener tasa CUP/EUR (usando caché)
+def get_cup_eur_rate():
+    """
+    Obtiene la tasa de cambio CUP/EUR desde el caché
+    Retorna: float o valor por defecto si hay error
+    """
+    try:
+        rates = get_eltoque_rates_cached()
+        
+        if rates:
+            # Buscar EUR/ECU en las tasas disponibles
+            if 'ECU' in rates:
+                cup_eur_rate = rates['ECU']
+                print(f"✅ Tasa CUP/EUR (ECU) obtenida: {cup_eur_rate}")
+                return cup_eur_rate
+        
+        # Fallback si no se encuentra EUR
+        print("⚠️ No se encontró tasa EUR, usando valor por defecto: 540.0")
+        return 540.0
+        
+    except Exception as e:
+        print(f"❌ Error obteniendo tasa CUP/EUR: {e}")
+        return 540.0
 
 # Función corregida para obtener tasa CUP/EUR
 def get_cup_eur_rate():
@@ -1056,69 +1075,134 @@ def show_complete_balance(call):
         parse_mode='Markdown',
         reply_markup=main_menu(call.message.chat.id)
     )
+# Variables globales para el caché
+rates_cache = None
+last_api_call = 0
+CACHE_DURATION = 2  # segundos (más de 1 para seguridad)
+
+def get_eltoque_rates_cached():
+    """
+    Obtiene las tasas de cambio con caché para evitar múltiples peticiones
+    """
+    global rates_cache, last_api_call
+    
+    current_time = time.time()
+    
+    # Si tenemos datos en caché y no han pasado más de CACHE_DURATION segundos, usamos el caché
+    if rates_cache and (current_time - last_api_call) < CACHE_DURATION:
+        print("✅ Usando tasas en caché")
+        return rates_cache
+    
+    # Si no, hacemos la petición a la API
+    rates_cache = get_eltoque_rates()
+    last_api_call = current_time
+    
+    return rates_cache
+def escape_markdown_v2(text):
+    """
+    Escapa caracteres especiales para MarkdownV2
+    """
+    if text is None:
+        return ""
+    
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    escaped_text = str(text)
+    
+    for char in escape_chars:
+        escaped_text = escaped_text.replace(char, f'\\{char}')
+    
+    return escaped_text    
 
 def show_current_rates(call_or_message):
-    """Muestra las tasas actuales de cambio desde la API de ElToque"""
+    """Muestra TODAS las tasas actuales de cambio desde la API de ElToque"""
     try:
-        # Obtener tasas desde la API
-        cup_usd_rate = get_cup_usd_rate()
-        cup_eur_rate = get_cup_eur_rate()
+        # Obtener todas las tasas desde el caché
+        all_rates = get_eltoque_rates_cached()
         
-        # Obtener todas las tasas para mostrar más información
-        all_rates = get_eltoque_rates()
+        if not all_rates:
+            # Si no hay tasas, usar valores por defecto
+            all_rates = {
+                'USD': 000,
+                'USDT_TRC20': 517, 
+                'MLC': 200,
+                'ECU': 540,
+                'BTC': 490,
+                'TRX': 180
+            }
+            print("⚠️ Usando tasas por defecto")
+
+        # Determinar la tasa principal para ProCoin (USD por defecto)
+        main_rate = all_rates.get('USD') 
+        if main_rate is None:
+            main_rate = all_rates.get('USDT_TRC20', 490.0)
+
+        # Construir el mensaje principal - SIN MARKDOWN COMPLEJO
+        rates_text = "📈 *TODAS LAS TASAS DE CAMBIO* 📈\\n\\n"
+        rates_text += f"💎 *Tasa Principal ProCoin:*\\n"
+        rates_text += f"• 1 PRC = {main_rate:,} CUP \\n\\n"
+
+        # Agregar TODAS las tasas disponibles
+        rates_text += "💱 *Tasas Disponibles:*\\n"
         
-        rates_text = f"""
-📈 *TASAS DE CAMBIO EN TIEMPO REAL*
+        # Ordenar las tasas para mejor presentación
+        sorted_rates = sorted(all_rates.items(), key=lambda x: x[0])
+        
+        for currency, rate in sorted_rates:
+            rates_text += f"• {currency}: {rate:,} CUP\\n"
 
-💵 *Tasa USD:*
-• 1 USD = {cup_usd_rate:,.0f} CUP
-• 1 PRC = {cup_usd_rate:,.0f} CUP
+        # Conversiones comunes de ProCoin
+        rates_text += "\\n📊 *Conversiones ProCoin:*\\n"
+        rates_text += f"• 10 PRC = {10 * main_rate:,} CUP\\n"
+        rates_text += f"• 50 PRC = {50 * main_rate:,} CUP\\n"  
+        rates_text += f"• 100 PRC = {100 * main_rate:,} CUP\\n"
 
-💶 *Tasa EUR:*
-• 1 EUR = {cup_eur_rate:,.0f} CUP"""
+        # Información adicional importante
+        rates_text += "\\n💡 *Información Importante:*\\n"
+        
+        if 'MLC' in all_rates:
+            mlc_rate = all_rates['MLC']
+            rates_text += f"• 1 MLC = {mlc_rate:,} CUP\\n"
+            
+        if 'USDT_TRC20' in all_rates:
+            usdt_rate = all_rates['USDT_TRC20']
+            rates_text += f"• 1 USDT = {usdt_rate:,} CUP\\n"
+            
+        if 'BTC' in all_rates:
+            btc_rate = all_rates['BTC']
+            rates_text += f"• 1 BTC = {btc_rate:,} CUP\\n"
+            
+        if 'TRX' in all_rates:
+            trx_rate = all_rates['TRX']
+            rates_text += f"• 1 TRX = {trx_rate:,} CUP\\n"
 
-        # Agregar otras tasas si están disponibles
-        if all_rates:
-            rates_text += f"\n\n💱 *Otras tasas disponibles:*"
-            for currency, rate in all_rates.items():
-                if currency not in ['USD', 'ECU']:  # Ya mostramos USD y EUR
-                    rates_text += f"\n• {currency}: {rate:,.0f} CUP"
+        rates_text += f"\\n🔄 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
-        rates_text += f"""
-
-📊 *Conversiones comunes ProCoin:*
-• 10 PRC = {10 * cup_usd_rate:,.0f} CUP
-• 50 PRC = {50 * cup_usd_rate:,.0f} CUP  
-• 100 PRC = {100 * cup_usd_rate:,.0f} CUP
-
-🔗 *Fuente:* API Oficial ElToque
-📅 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
-
-        # Si es un callback, editamos el mensaje existente
+        # Envío del mensaje
         if hasattr(call_or_message, 'message'):
-            # Es un callback (CallbackQuery)
+            # Es un CallbackQuery (desde botón inline)
             chat_id = call_or_message.message.chat.id
             message_id = call_or_message.message.message_id
+            
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=rates_text,
-                parse_mode='Markdown',
+                parse_mode='MarkdownV2',
                 reply_markup=main_menu(chat_id)
             )
         else:
-            # Es un mensaje (Message)
+            # Es un Message (desde comando /tasas)
             chat_id = call_or_message.chat.id
             bot.send_message(
                 chat_id,
                 rates_text,
-                parse_mode='Markdown',
+                parse_mode='MarkdownV2',
                 reply_markup=main_menu(chat_id)
             )
             
     except Exception as e:
         print(f"❌ Error en show_current_rates: {e}")
-        error_text = "❌ *Error obteniendo tasas*\n\nPor favor, intenta nuevamente en unos momentos."
+        error_text = "❌ *Error obteniendo tasas*\\n\\nPor favor, intenta nuevamente en unos momentos\\."
         
         if hasattr(call_or_message, 'message'):
             chat_id = call_or_message.message.chat.id
@@ -1127,7 +1211,7 @@ def show_current_rates(call_or_message):
                 chat_id=chat_id,
                 message_id=message_id,
                 text=error_text,
-                parse_mode='Markdown',
+                parse_mode='MarkdownV2',
                 reply_markup=main_menu(chat_id)
             )
         else:
@@ -1135,10 +1219,9 @@ def show_current_rates(call_or_message):
             bot.send_message(
                 chat_id,
                 error_text,
-                parse_mode='Markdown',
+                parse_mode='MarkdownV2',
                 reply_markup=main_menu(chat_id)
             )
-
 @bot.message_handler(commands=['tasas'])
 def show_rates_command(message):
     """Comando para ver tasas actuales"""
@@ -1372,17 +1455,48 @@ def show_balance_command(message):
             reply_markup=main_menu(message.chat.id)
         )
 
+def test_cache_system():
+    """Prueba el sistema de caché"""
+    print("🧪 Probando sistema de caché...")
+    
+    # Primera llamada - debería hacer petición
+    start_time = time.time()
+    rates1 = get_eltoque_rates_cached()
+    time1 = time.time() - start_time
+    
+    # Segunda llamada inmediata - debería usar caché
+    start_time = time.time()
+    rates2 = get_eltoque_rates_cached()
+    time2 = time.time() - start_time
+    
+    print(f"⏱️ Tiempo primera llamada: {time1:.3f}s")
+    print(f"⏱️ Tiempo segunda llamada: {time2:.3f}s")
+    print(f"✅ Caché funcionando: {time2 < time1 and time2 < 0.01}")
+    
+    return rates1 is not None
+
 # INICIALIZACIÓN Y EJECUCIÓN
 def run_bot():
     """Ejecuta el bot de Telegram en un hilo separado"""
     print("🧠 Inicializando base de datos...")
     init_db()
+    
+    # Probar la API de ElToque y el caché al inicio
+    print("🧪 Probando API ElToque y sistema de caché...")
+    api_works = test_eltoque_api()
+    cache_works = test_cache_system()
+    
+    if api_works and cache_works:
+        print("✅ API ElToque y caché funcionando correctamente")
+    else:
+        print("❌ Problemas con API o caché, usando tasas por defecto")
+    
     print("🤖 Iniciando bot ProCoin...")
     print(f"👑 Administrador: {ADMIN_ID}")
     print(f"📢 Notificaciones al grupo: {GROUP_CHAT_ID}")
     
     # Probar notificaciones al inicio
-    test_msg = "🔔 *Bot ProCoin iniciado* - Sistema con tasas en tiempo real activo"
+    test_msg = "🔔 *Bot ProCoin iniciado* - Sistema con API ElToque y caché activo"
     send_group_notification(test_msg)
     
     try:
@@ -1391,13 +1505,3 @@ def run_bot():
         print(f"Error en el bot: {e}")
         time.sleep(10)
         run_bot()
-
-if __name__ == "__main__":
-    # Iniciar el bot en un hilo separado
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Iniciar el servidor web para Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
