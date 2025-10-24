@@ -64,7 +64,7 @@ def get_eltoque_rates_cached():
             # Si no hay caché y la API falla, usar valores por defecto
             print("⚠️ Sin caché y API falló, usando valores por defecto")
             default_rates = {
-                'USD': 490,
+                'USD': 000,
                 'USDT_TRC20': 517, 
                 'MLC': 200,
                 'ECU': 540,
@@ -130,7 +130,7 @@ def get_cup_usd_rate():
         rates = get_eltoque_rates_cached()
         return rates.get('USD') or rates.get('USDT_TRC20', 490)
     except:
-        return 490
+        return 20
 
 def get_cup_eur_rate():
     """Obtiene tasa EUR de forma robusta"""
@@ -229,13 +229,19 @@ def init_db():
     print("✅ Base de datos inicializada")
 
 def escape_markdown(text):
-    """Escapa texto para Markdown"""
+    """Escapa texto para Markdown V2 de forma correcta"""
     if text is None:
         return ""
-    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    # Para MarkdownV2, estos son los caracteres que deben escaparse
+    escape_chars = r'\_*[]()~`>#+-=|{}.!'
+    
+    # Escapar cada carácter especial
+    escaped_text = str(text)
     for char in escape_chars:
-        text = str(text).replace(char, f'\\{char}')
-    return text
+        escaped_text = escaped_text.replace(char, f'\\{char}')
+    
+    return escaped_text
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -429,7 +435,7 @@ def recharge_balance(message):
                         "Uso: `/recargar WALLET CANTIDAD`\n\n"
                         "• WALLET = Dirección del usuario\n"
                         "• CANTIDAD = ProCoin a recargar\n\n"
-                        "Ejemplo: `/recargar PRCABC123 100.50`", 
+                        "Ejemplo: `/recargar PRCABC123 100\\.50`", 
                         parse_mode='Markdown')
             return
         
@@ -465,7 +471,7 @@ def recharge_balance(message):
 • Saldo anterior: {old_balance:.2f} PRC
 • Nuevo saldo: *{new_balance:.2f} PRC*
 
-¡Gracias por usar ProCoin! 🎉"""
+¡Gracias por usar ProCoin\\! 🎉"""
             
             bot.send_message(user_info[0], user_notification, parse_mode='Markdown')
         except Exception as e:
@@ -542,23 +548,23 @@ def show_current_rates(call_or_message):
 📈 *TASAS DE CAMBIO ACTUALES*
 
 💎 *Tasa Principal ProCoin:*
-• 1 PRC = {main_rate:,} CUP
+• 1 PRC = {escape_markdown(main_rate)} CUP
 
 💱 *Todas las Tasas Disponibles:*
 """
         
         # Agregar todas las tasas ordenadas
         for currency, rate in sorted(all_rates.items()):
-            rates_text += f"• {currency}: {rate:,} CUP\n"
+            rates_text += f"• {escape_markdown(currency)}: {escape_markdown(rate)} CUP\n"
         
         # Conversiones comunes
         rates_text += f"""
 📊 *Conversiones ProCoin:*
-• 10 PRC = {10 * main_rate:,} CUP
-• 50 PRC = {50 * main_rate:,} CUP  
-• 100 PRC = {100 * main_rate:,} CUP
+• 10 PRC = {escape_markdown(10 * main_rate)} CUP
+• 50 PRC = {escape_markdown(50 * main_rate)} CUP  
+• 100 PRC = {escape_markdown(100 * main_rate)} CUP
 
-🔄 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+🔄 *Actualizado:* {escape_markdown(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"""
         
         print("✅ Mensaje de tasas construido correctamente")
         
@@ -588,10 +594,10 @@ def show_current_rates(call_or_message):
             
     except Exception as e:
         print(f"❌ Error mostrando tasas: {e}")
-        error_text = "❌ *Error temporal al obtener tasas*\n\n🔧 El equipo ha sido notificado.\n🔄 Intenta nuevamente en unos minutos."
+        error_text = "❌ *Error temporal al obtener tasas*\n\n🔧 El equipo ha sido notificado\\.\n🔄 Intenta nuevamente en unos minutos\\.\n\n*Información del error:* `" + escape_markdown(str(e)) + "`"
         
         # Notificar error al grupo
-        send_group_notification(f"🚨 *Error en sistema de tasas:* {str(e)}")
+        send_group_notification(f"🚨 *Error en sistema de tasas:* {escape_markdown(str(e))}")
         
         if hasattr(call_or_message, 'message'):
             chat_id = call_or_message.message.chat.id
@@ -627,14 +633,14 @@ def handle_deposit_cup(call):
         deposit_text = f"""
 💵 *DEPOSITAR CUP*
 
-💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
+💱 *Tasa actual:* 1 PRC = {escape_markdown(cup_rate)} CUP
 
 📊 *Tu saldo actual:* {user_info[3]:.2f} PRC
 
 💡 *¿Cómo funciona?*
-1. Depositas CUP via Transfermóvil/EnZona
-2. Se convierte automáticamente a ProCoin
-3. Recibes ProCoin en tu wallet
+1\\. Depositas CUP via Transfermóvil/EnZona
+2\\. Se convierte automáticamente a ProCoin
+3\\. Recibes ProCoin en tu wallet
 
 💎 *Selecciona el método de pago:*"""
         
@@ -674,7 +680,7 @@ def start_cup_deposit(call, method):
         msg = bot.send_message(
             call.message.chat.id,
             f"💵 *DEPÓSITO POR {method_name}*\n\n"
-            f"💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP\n\n"
+            f"💱 *Tasa actual:* 1 PRC = {escape_markdown(cup_rate)} CUP\n\n"
             f"💵 Ingresa el monto en *CUP* que vas a depositar:",
             parse_mode='Markdown'
         )
@@ -694,7 +700,7 @@ def process_cup_deposit_amount(message, method):
         except:
             bot.send_message(
                 message.chat.id,
-                "❌ *Formato inválido*\nIngresa un número válido.\n\nEjemplo: 1000 o 1000.50",
+                "❌ *Formato inválido*\nIngresa un número válido\\.\n\nEjemplo: 1000 o 1000\\.50",
                 parse_mode='Markdown',
                 reply_markup=main_menu(message.chat.id)
             )
@@ -703,7 +709,7 @@ def process_cup_deposit_amount(message, method):
         if amount_cup <= 0:
             bot.send_message(
                 message.chat.id,
-                "❌ *Monto inválido*\nEl monto debe ser mayor a 0.",
+                "❌ *Monto inválido*\nEl monto debe ser mayor a 0\\.",
                 parse_mode='Markdown',
                 reply_markup=main_menu(message.chat.id)
             )
@@ -712,7 +718,7 @@ def process_cup_deposit_amount(message, method):
         if amount_cup < 100:
             bot.send_message(
                 message.chat.id,
-                "❌ *Monto muy bajo*\nEl depósito mínimo es 100 CUP.",
+                "❌ *Monto muy bajo*\nEl depósito mínimo es 100 CUP\\.",
                 parse_mode='Markdown',
                 reply_markup=main_menu(message.chat.id)
             )
@@ -740,51 +746,51 @@ def process_cup_deposit_amount(message, method):
 💳 *Información para transferir:*
 • *Teléfono:* `5351234567`
 • *Nombre:* ProCoin Exchange
-• *Monto:* *{amount_cup:,.0f} CUP*
+• *Monto:* *{escape_markdown(amount_cup)} CUP*
 
 📊 *Conversión a ProCoin:*
-• CUP depositados: {amount_cup:,.0f} CUP
-• Tasa: 1 PRC = {cup_rate:,.0f} CUP
+• CUP depositados: {escape_markdown(amount_cup)} CUP
+• Tasa: 1 PRC = {escape_markdown(cup_rate)} CUP
 • Recibirás: *{amount_prc:.2f} PRC*
 
 📋 *Pasos:*
-1. Abre Transfermóvil
-2. Selecciona *Transferir*
-3. Ingresa teléfono: *5351234567*
-4. Monto: *{amount_cup:,.0f} CUP*
-5. Confirma transferencia
-6. Toma captura del comprobante
-7. Envíala aquí
+1\\. Abre Transfermóvil
+2\\. Selecciona *Transferir*
+3\\. Ingresa teléfono: *5351234567*
+4\\. Monto: *{escape_markdown(amount_cup)} CUP*
+5\\. Confirma transferencia
+6\\. Toma captura del comprobante
+7\\. Envíala aquí
 
 ⚠️ *Importante:* 
-• Monto exacto: {amount_cup:,.0f} CUP
+• Monto exacto: {escape_markdown(amount_cup)} CUP
 • Solo transferencias propias
-• Verificación: 5-15 minutos"""
+• Verificación: 5\\-15 minutos"""
         else:
             payment_text = f"""
 🔵 *INSTRUCCIONES ENZONA*
 
 💳 *Información para pagar:*
 • *Nombre:* ProCoin Exchange
-• *Monto:* *{amount_cup:,.0f} CUP*
+• *Monto:* *{escape_markdown(amount_cup)} CUP*
 
 📊 *Conversión a ProCoin:*
-• CUP depositados: {amount_cup:,.0f} CUP
-• Tasa: 1 PRC = {cup_rate:,.0f} CUP
+• CUP depositados: {escape_markdown(amount_cup)} CUP
+• Tasa: 1 PRC = {escape_markdown(cup_rate)} CUP
 • Recibirás: *{amount_prc:.2f} PRC*
 
 📋 *Pasos:*
-1. Abre EnZona
-2. Busca *ProCoin Exchange*
-3. Monto: *{amount_cup:,.0f} CUP*
-4. Realiza el pago
-5. Toma captura del comprobante
-6. Envíala aquí
+1\\. Abre EnZona
+2\\. Busca *ProCoin Exchange*
+3\\. Monto: *{escape_markdown(amount_cup)} CUP*
+4\\. Realiza el pago
+5\\. Toma captura del comprobante
+6\\. Envíala aquí
 
 ⚠️ *Importante:* 
-• Monto exacto: {amount_cup:,.0f} CUP
+• Monto exacto: {escape_markdown(amount_cup)} CUP
 • Solo pagos propios
-• Verificación: 5-15 minutos"""
+• Verificación: 5\\-15 minutos"""
         
         # Registrar en base de datos
         log_deposit(deposit_id, user_id, amount_cup, amount_prc, cup_rate, method, "pending")
@@ -805,7 +811,7 @@ def process_cup_deposit_amount(message, method):
         print(f"❌ Error procesando depósito: {e}")
         bot.send_message(
             message.chat.id,
-            "❌ Error al procesar el depósito. Intenta nuevamente.",
+            "❌ Error al procesar el depósito\\. Intenta nuevamente\\.",
             parse_mode='Markdown',
             reply_markup=main_menu(message.chat.id)
         )
@@ -821,7 +827,7 @@ def handle_screenshot(message):
         user_id = message.from_user.id
         
         if user_id not in pending_deposits:
-            bot.reply_to(message, "❌ No tienes un depósito pendiente. Usa el menú para iniciar un depósito.")
+            bot.reply_to(message, "❌ No tienes un depósito pendiente\\. Usa el menú para iniciar un depósito\\.")
             return
         
         user_info = get_user_info(user_id)
@@ -845,12 +851,12 @@ def handle_screenshot(message):
 *Usuario:* {escape_markdown(user_info[2])}
 *Wallet:* `{user_info[4]}`
 *Método:* {method_display}
-*CUP depositados:* {deposit_data['amount_cup']:,.0f} CUP
+*CUP depositados:* {escape_markdown(deposit_data['amount_cup'])} CUP
 *ProCoin a recibir:* {deposit_data['amount_prc']:.2f} PRC
-*Tasa:* 1 PRC = {deposit_data['exchange_rate']:,.0f} CUP
+*Tasa:* 1 PRC = {escape_markdown(deposit_data['exchange_rate'])} CUP
 *Depósito ID:* `{deposit_data['deposit_id']}`
 
-⏳ *Esperando verificación...*
+⏳ *Esperando verificación\\.\\.\\.*
 
 💾 *Para aprobar usa:*
 `/recargar {user_info[4]} {deposit_data['amount_prc']:.2f}`"""
@@ -862,13 +868,13 @@ def handle_screenshot(message):
                     f"✅ *Captura recibida correctamente*\n\n"
                     f"📋 *Resumen de tu depósito:*\n"
                     f"• Método: {method_display}\n"
-                    f"• CUP depositados: {deposit_data['amount_cup']:,.0f} CUP\n"
+                    f"• CUP depositados: {escape_markdown(deposit_data['amount_cup'])} CUP\n"
                     f"• ProCoin a recibir: {deposit_data['amount_prc']:.2f} PRC\n"
-                    f"• Tasa: 1 PRC = {deposit_data['exchange_rate']:,.0f} CUP\n"
+                    f"• Tasa: 1 PRC = {escape_markdown(deposit_data['exchange_rate'])} CUP\n"
                     f"• ID: {deposit_data['deposit_id']}\n\n"
                     f"⏰ *Estado:* En revisión\n"
-                    f"📞 *Tiempo estimado:* 5-15 minutos\n\n"
-                    f"Te notificaremos cuando sea verificado.",
+                    f"📞 *Tiempo estimado:* 5\\-15 minutos\n\n"
+                    f"Te notificaremos cuando sea verificado\\.",
                     parse_mode='Markdown',
                     reply_markup=main_menu(message.chat.id))
         
@@ -877,7 +883,7 @@ def handle_screenshot(message):
         
     except Exception as e:
         print(f"❌ Error manejando screenshot: {e}")
-        bot.reply_to(message, "❌ Error al procesar la captura. Intenta nuevamente.")
+        bot.reply_to(message, "❌ Error al procesar la captura\\. Intenta nuevamente\\.")
 
 # =============================================================================
 # MANEJADORES DE CALLBACK RESTANTES
@@ -905,9 +911,9 @@ def handle_check_balance(call):
 
 💎 *Balance ProCoin:*
 • Saldo disponible: {user_info[3]:.2f} PRC
-• Equivalente en CUP: {user_info[3] * cup_rate:,.0f} CUP
+• Equivalente en CUP: {escape_markdown(user_info[3] * cup_rate)} CUP
 
-💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP"""
+💱 *Tasa actual:* 1 PRC = {escape_markdown(cup_rate)} CUP"""
         
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -934,12 +940,12 @@ def handle_receive_money(call):
 `{user_info[4]}`
 
 📋 *Instrucciones:*
-1. Comparte esta dirección con quien te enviará ProCoin
-2. El remitente debe usar la opción *\"Enviar ProCoin\"*
-3. Ingresa tu dirección única mostrada arriba
-4. ¡Recibirás los ProCoin instantáneamente!
+1\\. Comparte esta dirección con quien te enviará ProCoin
+2\\. El remitente debe usar la opción *\\\"Enviar ProCoin\\\"*
+3\\. Ingresa tu dirección única mostrada arriba
+4\\. ¡Recibirás los ProCoin instantáneamente\\!
 
-💡 *Consejo:* Copia tu dirección haciendo clic en ella."""
+💡 *Consejo:* Copia tu dirección haciendo clic en ella\\."""
         
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -967,10 +973,10 @@ def handle_back_to_main(call):
 
 📊 *Información actual:*
 • Saldo: {user_info[3]:.2f} PRC
-• Equivalente: {user_info[3] * cup_rate:,.0f} CUP
+• Equivalente: {escape_markdown(user_info[3] * cup_rate)} CUP
 • Wallet: `{user_info[4]}`
 
-💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
+💱 *Tasa actual:* 1 PRC = {escape_markdown(cup_rate)} CUP
 
 ⚡ *Selecciona una opción:*"""
         
@@ -1013,7 +1019,7 @@ def run_bot():
         
     except Exception as e:
         print(f"❌ Error crítico: {e}")
-        send_group_notification(f"🚨 *Error crítico en el bot:* {e}")
+        send_group_notification(f"🚨 *Error crítico en el bot:* {escape_markdown(str(e))}")
         time.sleep(10)
         run_bot()  # Reiniciar
 
