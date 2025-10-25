@@ -53,6 +53,26 @@ def get_eltoque_rates_cached():
     if new_rates:
         rates_cache = new_rates
         last_api_call = current_time
+        
+        # NOTIFICAR AL GRUPO CUANDO SE SINCRONICE LA API
+        try:
+            usd_rate = new_rates.get('USD', 'N/A')
+            eur_rate = new_rates.get('ECU', 'N/A')
+            
+            sync_notification = f"""
+🔗 *API SINCRONIZADA EXITOSAMENTE*
+
+💵 *Tasa USD:* {usd_rate} CUP
+💶 *Tasa EUR:* {eur_rate} CUP
+
+⏰ *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🔄 *Próxima actualización:* 1 minuto"""
+            
+            send_group_notification(sync_notification)
+            print(f"✅ Notificación de sincronización enviada al grupo")
+        except Exception as e:
+            print(f"⚠️ Error enviando notificación de sincronización: {e}")
+        
         print(f"✅ Caché actualizado con {len(new_rates)} tasas")
         return rates_cache
     else:
@@ -65,11 +85,7 @@ def get_eltoque_rates_cached():
             print("⚠️ Sin caché y API falló, usando valores por defecto")
             default_rates = {
                 'USD': 490,
-                'USDT_TRC20': 517, 
-                'MLC': 200,
-                'ECU': 540,
-                'BTC': 490,
-                'TRX': 180
+                'ECU': 540
             }
             rates_cache = default_rates
             last_api_call = current_time
@@ -105,16 +121,17 @@ def get_eltoque_rates():
             print("❌ No se encontró campo 'tasas'")
             return None
         
-        # Procesar tasas
+        # Procesar tasas - SOLO USD Y EUR (ECU)
         rates = {}
         for currency, rate in data['tasas'].items():
-            try:
-                rates[currency] = float(rate)
-            except (ValueError, TypeError):
-                continue
+            if currency in ['USD', 'ECU']:  # SOLO NOS INTERESAN DÓLAR Y EURO
+                try:
+                    rates[currency] = float(rate)
+                except (ValueError, TypeError):
+                    continue
         
         if rates:
-            print(f"✅ {len(rates)} tasas obtenidas")
+            print(f"✅ {len(rates)} tasas obtenidas (USD y EUR)")
             return rates
         else:
             print("❌ No se pudieron procesar las tasas")
@@ -128,7 +145,7 @@ def get_cup_usd_rate():
     """Obtiene tasa USD de forma robusta"""
     try:
         rates = get_eltoque_rates_cached()
-        return rates.get('USD') or rates.get('USDT_TRC20', 490)
+        return rates.get('USD', 490)
     except:
         return 490
 
@@ -136,7 +153,7 @@ def get_cup_eur_rate():
     """Obtiene tasa EUR de forma robusta"""
     try:
         rates = get_eltoque_rates_cached()
-        return rates.get('ECU') or rates.get('EUR', 540)
+        return rates.get('ECU', 540)
     except:
         return 540
 
@@ -1100,11 +1117,11 @@ def process_withdraw_amount(message):
         bot.send_message(message.chat.id, "❌ Error al procesar el retiro.")
 
 # =============================================================================
-# SISTEMA DE TASAS MEJORADO - CORREGIDO
+# SISTEMA DE TASAS MEJORADO - CORREGIDO (SOLO USD Y EUR)
 # =============================================================================
 
 def show_current_rates(message):
-    """Muestra tasas de forma confiable y estética - CORREGIDO"""
+    """Muestra SOLO tasas USD y EUR de forma confiable y estética - CORREGIDO"""
     try:
         print("🔍 Obteniendo tasas para mostrar...")
         
@@ -1115,32 +1132,27 @@ def show_current_rates(message):
             error_msg = "❌ *No se pudieron obtener las tasas*\n\nPor favor, intenta nuevamente en unos minutos."
             raise Exception("No se pudieron obtener tasas")
         
-        # Usar USD o USDT como tasa principal
-        main_rate = all_rates.get('USD') or all_rates.get('USDT_TRC20') or 490
+        # Obtener tasas específicas
+        usd_rate = all_rates.get('USD', 'N/A')
+        eur_rate = all_rates.get('ECU', 'N/A')
         
-        # Construir mensaje de forma estética
+        # Construir mensaje de forma estética - SOLO USD Y EUR
         rates_text = f"""
 📈 *TASAS DE CAMBIO ACTUALES* 📈
 
-💎 *Tasa Principal ProCoin:*
+💵 *Tasa del Dólar (USD):*
 ┌────────────────────────
-│ 1 PRC = {main_rate:,} CUP
+│ 1 USD = {usd_rate} CUP
 └────────────────────────
 
-💱 *Todas las Tasas Disponibles:*
-"""
-        
-        # Agregar todas las tasas ordenadas
-        for currency, rate in sorted(all_rates.items()):
-            rates_text += f"• {currency}: {rate:,} CUP\n"
-        
-        # Conversiones comunes
-        rates_text += f"""
-📊 *Conversiones ProCoin:*
+💶 *Tasa del Euro (EUR):*
 ┌────────────────────────
-│ 10 PRC = {10 * main_rate:,} CUP
-│ 50 PRC = {50 * main_rate:,} CUP  
-│ 100 PRC = {100 * main_rate:,} CUP
+│ 1 EUR = {eur_rate} CUP
+└────────────────────────
+
+💎 *Tasa ProCoin (PRC):*
+┌────────────────────────
+│ 1 PRC = {usd_rate} CUP
 └────────────────────────
 
 🔄 *Actualizado:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -1167,21 +1179,25 @@ def show_current_rates(message):
         )
 
 # =============================================================================
-# SISTEMA DE DEPÓSITOS MEJORADO
+# SISTEMA DE DEPÓSITOS MEJORADO - CON TASA USD EN TIEMPO REAL
 # =============================================================================
 
 @bot.message_handler(func=lambda message: message.text == "💵 Depositar")
 def show_deposit_options(message):
-    """Muestra opciones de depósito"""
+    """Muestra opciones de depósito CON TASA USD EN TIEMPO REAL"""
     try:
         user_id = message.from_user.id
         user_info = get_user_info(user_id)
-        cup_rate = get_cup_usd_rate()
+        cup_rate = get_cup_usd_rate()  # TASA EN TIEMPO REAL
         
         deposit_text = f"""
 💵 *DEPOSITAR FONDOS* 💵
 
-💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP
+💱 *Tasa actual en tiempo real:*
+┌────────────────────────
+│ 1 USD = {cup_rate:,.0f} CUP
+│ 1 PRC = {cup_rate:,.0f} CUP
+└────────────────────────
 
 📊 *Tu saldo actual:* {user_info[3]:.2f} PRC
 
@@ -1214,15 +1230,19 @@ def handle_deposit_method(message):
         bot.send_message(message.chat.id, "❌ Error al seleccionar método.")
 
 def start_cup_deposit(message, method):
-    """Inicia el proceso de depósito"""
+    """Inicia el proceso de depósito CON TASA USD EN TIEMPO REAL"""
     try:
-        cup_rate = get_cup_usd_rate()
+        cup_rate = get_cup_usd_rate()  # TASA EN TIEMPO REAL
         method_name = "Transfermóvil" if method == "transfermovil" else "EnZona"
         
         msg = bot.send_message(
             message.chat.id,
             f"💵 *DEPÓSITO POR {method_name}* 💵\n\n"
-            f"💱 *Tasa actual:* 1 PRC = {cup_rate:,.0f} CUP\n\n"
+            f"💱 *Tasa actual en tiempo real:*\n"
+            f"┌────────────────────────\n"
+            f"│ 1 USD = {cup_rate:,.0f} CUP\n"
+            f"│ 1 PRC = {cup_rate:,.0f} CUP\n"
+            f"└────────────────────────\n\n"
             f"💵 *Ingresa el monto en CUP que deseas depositar:*\n\n"
             f"💡 *Ejemplo:* 1000, 5000, 10000",
             parse_mode='Markdown'
@@ -1233,7 +1253,7 @@ def start_cup_deposit(message, method):
         bot.send_message(message.chat.id, "❌ Error al iniciar depósito.")
 
 def process_cup_deposit_amount(message, method):
-    """Procesa el monto del depósito"""
+    """Procesa el monto del depósito CON TASA USD EN TIEMPO REAL"""
     try:
         user_id = message.from_user.id
         
@@ -1267,7 +1287,7 @@ def process_cup_deposit_amount(message, method):
             )
             return
         
-        # Calcular conversión
+        # Calcular conversión CON TASA USD EN TIEMPO REAL
         cup_rate = get_cup_usd_rate()
         amount_prc = amount_cup / cup_rate
         
@@ -1285,6 +1305,12 @@ def process_cup_deposit_amount(message, method):
         if method == "transfermovil":
             payment_text = f"""
 📱 *INSTRUCCIONES TRANSFERMÓVIL* 📱
+
+💱 *Tasa actual en tiempo real:*
+┌────────────────────────
+│ 1 USD = {cup_rate:,.0f} CUP
+│ 1 PRC = {cup_rate:,.0f} CUP
+└────────────────────────
 
 💳 *Información para transferir:*
 ┌────────────────────────
@@ -1316,6 +1342,12 @@ def process_cup_deposit_amount(message, method):
         else:
             payment_text = f"""
 🔵 *INSTRUCCIONES ENZONA* 🔵
+
+💱 *Tasa actual en tiempo real:*
+┌────────────────────────
+│ 1 USD = {cup_rate:,.0f} CUP
+│ 1 PRC = {cup_rate:,.0f} CUP
+└────────────────────────
 
 💳 *Información para pagar:*
 ┌────────────────────────
