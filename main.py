@@ -536,6 +536,7 @@ def process_market_selection(call, market_data: str):
     )
 
 # MEJORA EN LA NOTIFICACIÓN DE APUESTAS
+# CORRECCIÓN EN LA FUNCIÓN send_bet_ticket_notification
 def send_bet_ticket_notification(user_id: int, bet_data: Dict, bet_id: str):
     user_info = get_user_info(user_id)
 
@@ -558,7 +559,7 @@ def send_bet_ticket_notification(user_id: int, bet_data: Dict, bet_id: str):
 👤 *Usuario:* {escape_markdown(user_info[2])}
 🏆 *Evento:* {escape_markdown(bet_data['event_name'])}
 🕒 *Fecha Evento:* {event_time}
-🎯 *Selección:* {escape_markdown(bet_data['outcome_name']}
+🎯 *Selección:* {escape_markdown(bet_data['outcome_name'])}  # AQUÍ SE ARREGLÓ EL PARÉNTESIS
 💰 *Cuota:* {bet_data['odds']:.2f}
 💵 *Monto:* ${bet_data['amount']:.2f} CUP
 🏆 *Potencial:* ${bet_data['potential_win']:.2f} CUP
