@@ -277,6 +277,7 @@ def get_competitions_for_sport(sport_group: str):
 
     return competition_mapping.get(sport_group, [])
 
+# CORRECCIÓN EN LA FUNCIÓN get_sport_events
 def get_sport_events(sport_key: str) -> List[Dict]:
     cache_key = f"{sport_key}_events"
 
@@ -288,34 +289,353 @@ def get_sport_events(sport_key: str) -> List[Dict]:
     try:
         events_with_odds = odds_api.get_odds(sport_key)
 
+        processed_events = []
         if events_with_odds:
-            processed_events = []
-            for event in events_with_odds[:10]:
-                if event.get('bookmakers') and len(event['bookmakers']) > 0:
-                    processed_event = {
-                        'id': event.get('id', str(uuid.uuid4())),
-                        'sport_key': event.get('sport_key', sport_key),
-                        'home_team': event.get('home_team', 'Equipo Local'),
-                        'away_team': event.get('away_team', 'Equipo Visitante'),
-                        'commence_time': event.get('commence_time', datetime.now().isoformat()),
-                        'bookmakers': event.get('bookmakers', []),
-                        'source': 'api'
-                    }
-                    processed_events.append(processed_event)
+            for event in events_with_odds[:10]:  # Solo mostrar 10 eventos
+                # Procesar datos reales de la API
+                home_team = event.get('home_team', 'Equipo Local')
+                away_team = event.get('away_team', 'Equipo Visitante')
+                event_id = event.get('id', str(uuid.uuid4()))
+                commence_time = event.get('commence_time', '')
+                
+                # Formatear fecha para mostrar
+                try:
+                    commence_dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
+                    formatted_time = commence_dt.strftime('%d/%m/%Y %H:%M')
+                except:
+                    formatted_time = "Próximamente"
 
-            if processed_events:
-                events_cache[cache_key] = {
-                    'data': processed_events,
-                    'last_updated': datetime.now()
+                # Buscar cuotas del mercado h2h
+                h2h_odds = {}
+                if event.get('bookmakers'):
+                    for bookmaker in event['bookmakers']:
+                        if bookmaker.get('markets'):
+                            for market in bookmaker['markets']:
+                                if market['key'] == 'h2h':
+                                    for outcome in market['outcomes']:
+                                        team = outcome['name']
+                                        price = outcome['price']
+                                        h2h_odds[team] = price
+                                    break
+                            if h2h_odds:
+                                break
+
+                processed_event = {
+                    'id': event_id,
+                    'sport_key': sport_key,
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'commence_time': commence_time,
+                    'formatted_time': formatted_time,
+                    'h2h_odds': h2h_odds,
+                    'bookmakers': event.get('bookmakers', []),
+                    'source': 'api'
                 }
-                return processed_events
+                processed_events.append(processed_event)
 
-        return generate_sample_events(sport_key)
+        if processed_events:
+            events_cache[cache_key] = {
+                'data': processed_events,
+                'last_updated': datetime.now()
+            }
+            return processed_events
+        else:
+            return generate_sample_events(sport_key)
 
     except Exception as e:
         print(f"❌ Error obteniendo eventos para {sport_key}: {e}")
         return generate_sample_events(sport_key)
 
+# CORRECCIÓN EN show_competition_events
+def show_competition_events(call, competition_key: str):
+    bot.answer_callback_query(call.id, "⏳ Cargando eventos...")
+
+    loading_text = "⏳ *Cargando eventos...*"
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=loading_text,
+        parse_mode='Markdown'
+    )
+
+    time.sleep(1)
+    sport_events = get_sport_events(competition_key)
+
+    if not sport_events:
+        error_text = "❌ *No hay eventos disponibles*"
+        markup = types.InlineKeyboardMarkup()
+        btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data="sports_betting")
+        markup.add(btn_back)
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=error_text,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        return
+
+    events_text = "🎯 *PRÓXIMOS EVENTOS - ÚLTIMOS 10*\n\n"
+    markup = types.InlineKeyboardMarkup()
+
+    for i, event in enumerate(sport_events):
+        home_team = escape_markdown(event.get('home_team', 'Local'))
+        away_team = escape_markdown(event.get('away_team', 'Visitante'))
+        event_id = event.get('id', '')
+        formatted_time = event.get('formatted_time', 'Próximamente')
+
+        btn = types.InlineKeyboardButton(
+            f"{i+1}. {home_team} vs {away_team}",
+            callback_data=f"event_{competition_key}_{event_id}"
+        )
+        markup.add(btn)
+
+        events_text += f"*{i+1}. {home_team} vs {away_team}*\n"
+        events_text += f"   🕒 {formatted_time}\n\n"
+
+    btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data="sports_betting")
+    markup.add(btn_back)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=events_text,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+# CORRECCIÓN EN show_event_markets
+def show_event_markets(call, event_data: str):
+    parts = event_data.split('_')
+    if len(parts) < 2:
+        bot.answer_callback_query(call.id, "❌ Error en datos")
+        return
+
+    sport_key = parts[0]
+    event_id = '_'.join(parts[1:])
+
+    sport_events = get_sport_events(sport_key)
+    current_event = None
+
+    for event in sport_events:
+        if event.get('id') == event_id:
+            current_event = event
+            break
+
+    if not current_event:
+        bot.answer_callback_query(call.id, "❌ Evento no encontrado")
+        return
+
+    home_team = escape_markdown(current_event.get('home_team', 'Local'))
+    away_team = escape_markdown(current_event.get('away_team', 'Visitante'))
+    formatted_time = current_event.get('formatted_time', 'Próximamente')
+    h2h_odds = current_event.get('h2h_odds', {})
+
+    markets_text = f"""
+🎯 *MERCADOS DISPONIBLES*
+
+⚽ *{home_team} vs {away_team}*
+🕒 *Fecha:* {formatted_time}
+
+💡 *Selecciona un tipo de apuesta:*"""
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+
+    btn_h2h = types.InlineKeyboardButton("🎯 Ganador", callback_data=f"market_{sport_key}_{event_id}_h2h")
+    btn_spreads = types.InlineKeyboardButton("📊 Handicap", callback_data=f"market_{sport_key}_{event_id}_spreads")
+    btn_totals = types.InlineKeyboardButton("⚖️ Over/Under", callback_data=f"market_{sport_key}_{event_id}_totals")
+    btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data=f"competition_{sport_key}")
+
+    markup.add(btn_h2h, btn_spreads, btn_totals, btn_back)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=markets_text,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+# CORRECCIÓN EN process_market_selection
+def process_market_selection(call, market_data: str):
+    parts = market_data.split('_')
+    if len(parts) < 3:
+        bot.answer_callback_query(call.id, "❌ Error en datos")
+        return
+
+    sport_key = parts[0]
+    event_id = '_'.join(parts[1:-1])
+    market_key = parts[-1]
+
+    user_id = call.from_user.id
+    if not has_minimum_balance(user_id):
+        bot.answer_callback_query(
+            call.id,
+            "❌ Saldo insuficiente. Mínimo: $30.00 CUP",
+            show_alert=True
+        )
+        return
+
+    sport_events = get_sport_events(sport_key)
+    current_event = None
+
+    for event in sport_events:
+        if event.get('id') == event_id:
+            current_event = event
+            break
+
+    if not current_event:
+        bot.answer_callback_query(call.id, "❌ Evento no encontrado")
+        return
+
+    home_team = escape_markdown(current_event.get('home_team', 'Local'))
+    away_team = escape_markdown(current_event.get('away_team', 'Visitante'))
+    formatted_time = current_event.get('formatted_time', 'Próximamente')
+    h2h_odds = current_event.get('h2h_odds', {})
+
+    market_text = f"""
+🎯 *SELECCIONAR APUESTA*
+
+⚽ *{home_team} vs {away_team}*
+🕒 *Fecha:* {formatted_time}
+
+💰 *Selecciona una opción:*"""
+
+    markup = types.InlineKeyboardMarkup()
+
+    if market_key == 'h2h':
+        # Usar odds reales de la API
+        home_odds = h2h_odds.get(home_team, 2.10)
+        away_odds = h2h_odds.get(away_team, 3.20)
+        draw_odds = h2h_odds.get('Draw', 3.50)
+
+        btn_home = types.InlineKeyboardButton(
+            f"🏠 {home_team} ({home_odds:.2f})", 
+            callback_data=f"bet_{sport_key}_{event_id}_h2h_{home_team}_{home_odds}"
+        )
+        btn_away = types.InlineKeyboardButton(
+            f"✈️ {away_team} ({away_odds:.2f})", 
+            callback_data=f"bet_{sport_key}_{event_id}_h2h_{away_team}_{away_odds}"
+        )
+        btn_draw = types.InlineKeyboardButton(
+            f"⚖️ Empate ({draw_odds:.2f})", 
+            callback_data=f"bet_{sport_key}_{event_id}_h2h_Draw_{draw_odds}"
+        )
+        markup.add(btn_home, btn_away, btn_draw)
+
+    btn_back = types.InlineKeyboardButton("🔙 Volver", callback_data=f"event_{sport_key}_{event_id}")
+    markup.add(btn_back)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=market_text,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+# MEJORA EN LA NOTIFICACIÓN DE APUESTAS
+def send_bet_ticket_notification(user_id: int, bet_data: Dict, bet_id: str):
+    user_info = get_user_info(user_id)
+
+    market_names = {
+        'h2h': 'Ganador del Partido',
+        'spreads': 'Handicap',
+        'totals': 'Over/Under'
+    }
+
+    # Formatear fecha del evento
+    try:
+        commence_dt = datetime.fromisoformat(bet_data['commence_time'].replace('Z', '+00:00'))
+        event_time = commence_dt.strftime('%d/%m/%Y %H:%M')
+    except:
+        event_time = "Próximamente"
+
+    ticket_message = f"""
+🎫 *TICKET DE APUESTA REGISTRADO*
+
+👤 *Usuario:* {escape_markdown(user_info[2])}
+🏆 *Evento:* {escape_markdown(bet_data['event_name'])}
+🕒 *Fecha Evento:* {event_time}
+🎯 *Selección:* {escape_markdown(bet_data['outcome_name']}
+💰 *Cuota:* {bet_data['odds']:.2f}
+💵 *Monto:* ${bet_data['amount']:.2f} CUP
+🏆 *Potencial:* ${bet_data['potential_win']:.2f} CUP
+🆔 *Ticket:* `{bet_id}`
+🕒 *Fecha Apuesta:* {format_time()}
+
+⚡ *¡Buena suerte!* 🍀"""
+
+    send_group_notification(ticket_message)
+
+# CORRECCIÓN EN process_bet_placement
+def process_bet_placement(call, bet_data: str):
+    parts = bet_data.split('_')
+    if len(parts) < 5:
+        bot.answer_callback_query(call.id, "❌ Error en datos")
+        return
+
+    user_id = call.from_user.id
+
+    if not has_minimum_balance(user_id):
+        bot.answer_callback_query(call.id, "❌ Saldo insuficiente", show_alert=True)
+        return
+
+    sport_key = parts[0]
+    event_id = '_'.join(parts[1:-3])
+    market_key = parts[-3]
+    outcome_name = parts[-2].replace('_', ' ')
+    odds = float(parts[-1])
+
+    sport_events = get_sport_events(sport_key)
+    current_event = None
+
+    for event in sport_events:
+        if event.get('id') == event_id:
+            current_event = event
+            break
+
+    if not current_event:
+        bot.answer_callback_query(call.id, "❌ Evento no encontrado")
+        return
+
+    home_team = current_event.get('home_team', 'Local')
+    away_team = current_event.get('away_team', 'Visitante')
+    event_name = f"{home_team} vs {away_team}"
+    commence_time = current_event.get('commence_time', datetime.now().isoformat())
+
+    user_states[user_id] = {
+        'action': 'placing_bet',
+        'sport_key': sport_key,
+        'sport_title': sport_key.replace('_', ' ').title(),
+        'event_id': event_id,
+        'event_name': event_name,
+        'commence_time': commence_time,
+        'market_key': market_key,
+        'outcome_name': outcome_name,
+        'odds': odds
+    }
+
+    bet_info_text = f"""
+🎯 *CONFIRMAR APUESTA*
+
+⚽ *Evento:* {escape_markdown(event_name)}
+🎯 *Selección:* {escape_markdown(outcome_name)}
+💰 *Cuota:* {odds:.2f}
+
+💵 *Ingresa el monto a apostar (CUP):*
+💰 *Mínimo: $30.00*"""
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=bet_info_text,
+        parse_mode='Markdown'
+    )
+
+
+# ACTUALIZAR generate_sample_events para que sea más realista
 def generate_sample_events(sport_key: str) -> List[Dict]:
     sample_events = []
 
@@ -323,12 +643,16 @@ def generate_sample_events(sport_key: str) -> List[Dict]:
         'soccer_epl': [
             ('Manchester United', 'Liverpool'),
             ('Arsenal', 'Chelsea'),
+            ('Manchester City', 'Tottenham'),
+            ('Newcastle', 'West Ham'),
+            ('Brighton', 'Crystal Palace'),
         ],
         'basketball_nba': [
-            ('Los Angeles Lakers', 'Golden State Warriors'),
+            ('Lakers', 'Warriors'),
+            ('Celtics', 'Heat'),
         ],
         'americanfootball_nfl': [
-            ('Kansas City Chiefs', 'Philadelphia Eagles'),
+            ('Chiefs', 'Eagles'),
         ],
         'default': [
             ('Equipo Local', 'Equipo Visitante'),
@@ -339,23 +663,16 @@ def generate_sample_events(sport_key: str) -> List[Dict]:
 
     for i, (home, away) in enumerate(teams):
         commence_time = datetime.now() + timedelta(hours=(i+1)*6)
+        
+        # Formatear fecha para mostrar
+        formatted_time = commence_time.strftime('%d/%m/%Y %H:%M')
 
-        example_bookmakers = [
-            {
-                'key': 'bet365',
-                'title': 'Bet365',
-                'markets': [
-                    {
-                        'key': 'h2h',
-                        'outcomes': [
-                            {'name': home, 'price': 2.10},
-                            {'name': away, 'price': 3.20},
-                            {'name': 'Draw', 'price': 3.50}
-                        ]
-                    }
-                ]
-            }
-        ]
+        # Crear odds realistas
+        h2h_odds = {
+            home: round(1.8 + (i * 0.1), 2),
+            away: round(2.2 + (i * 0.1), 2),
+            'Draw': round(3.2 + (i * 0.1), 2)
+        }
 
         sample_events.append({
             'id': f"sample_{sport_key}_{i}",
@@ -363,7 +680,9 @@ def generate_sample_events(sport_key: str) -> List[Dict]:
             'home_team': home,
             'away_team': away,
             'commence_time': commence_time.isoformat(),
-            'bookmakers': example_bookmakers,
+            'formatted_time': formatted_time,
+            'h2h_odds': h2h_odds,
+            'bookmakers': [],
             'source': 'sample'
         })
 
@@ -374,7 +693,6 @@ def generate_sample_events(sport_key: str) -> List[Dict]:
     }
 
     return sample_events
-
 # FUNCIONES DE UTILIDAD
 def escape_markdown(text):
     if text is None:
