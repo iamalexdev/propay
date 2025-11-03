@@ -13,7 +13,7 @@ import json
 from typing import Dict, List, Optional
 
 # Configuración
-TOKEN = "7630853977:AAHXJX6fT25RK4nfvibIA6c_za7rfmC41_Y"
+TOKEN = "7630853977:AAFgZ0wfQnXQC-2w08u0FqUKtzxLajUOsMo"
 GROUP_CHAT_ID = "-1002636806169"
 ADMIN_ID = 1853800972
 ODDS_API_KEY = "edcbefe298f5551465376966b6e1c064"  # Obtén en: https://the-odds-api.com/
