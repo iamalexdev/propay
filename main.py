@@ -10,6 +10,14 @@ import os
 import requests
 import json
 from typing import Dict, List, Optional
+import logging
+
+# Configurar logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Configuración
 TOKEN = "7630853977:AAFgZ0wfQnXQC-2w08u0FqUKtzxLajUOsMo"
@@ -1494,10 +1502,23 @@ def recharge_balance(message):
 
     bot.reply_to(message, f"✅ *Recarga exitosa*\nNuevo saldo: ${new_balance:.2f} CUP", parse_mode='Markdown')
 
-# INICIALIZACIÓN
-if __name__ == "__main__":
-    print("🎯 Iniciando CubaBet...")
+# SISTEMA DE POLLING ROBUSTO
+def run_bot():
+    """Función robusta para ejecutar el bot con manejo de errores"""
+    logger.info("🎯 Iniciando CubaBet...")
     init_db()
     cache_sports_data()
-    print("✅ Sistema listo")
-    bot.polling(none_stop=True)
+    logger.info("✅ Sistema listo")
+    
+    while True:
+        try:
+            logger.info("🔄 Iniciando polling...")
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.error(f"❌ Error en polling: {e}")
+            logger.info("🔄 Reiniciando en 10 segundos...")
+            time.sleep(10)
+
+# INICIALIZACIÓN
+if __name__ == "__main__":
+    run_bot()
