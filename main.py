@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 TOKEN = "7630853977:AAFgZ0wfQnXQC-2w08u0FqUKtzxLajUOsMo"
 GROUP_CHAT_ID = "-1002636806169"
 ADMIN_ID = 1853800972
-ODDS_API_KEY = "edcbefe298f5551465376966b6e1c064"  # Obtén en: https://the-odds-api.com/
+ODDS_API_KEY = "edcbefe298f5551465376966b6e1c064"
 bot = telebot.TeleBot(TOKEN)
 
 # Estados y caché
@@ -34,6 +34,9 @@ API_CONFIG = {
     'odds_format': 'decimal',
     'date_format': 'iso'
 }
+
+# CUOTAS FIJAS - SIEMPRE 1.9
+FIXED_ODDS = 1.9
 
 # Mapeo de competiciones principales
 MAIN_COMPETITIONS = {
@@ -151,7 +154,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# CLASE ODDS API
+# CLASE ODDS API (se mantiene pero no se usará para cuotas)
 class OddsAPI:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -317,7 +320,7 @@ def get_sport_events(sport_key: str) -> List[Dict]:
         return generate_sample_events(sport_key)
 
 def get_event_with_odds(sport_key: str, event_id: str) -> Optional[Dict]:
-    """Obtiene información detallada de un evento específico con sus cuotas"""
+    """Obtiene información detallada de un evento específico"""
     events = get_sport_events(sport_key)
     
     for event in events:
@@ -325,94 +328,33 @@ def get_event_with_odds(sport_key: str, event_id: str) -> Optional[Dict]:
             return event
     return None
 
-def format_odds_display(event_data: Dict, market_key: str = 'h2h') -> Optional[Dict]:
-    """Formatea las cuotas para mostrar en el teclado inline"""
-    if not event_data.get('bookmakers'):
-        return None
-    
-    # Tomar el primer bookmaker disponible
-    bookmaker = event_data['bookmakers'][0]
-    market_data = None
-    
-    for market in bookmaker.get('markets', []):
-        if market['key'] == market_key:
-            market_data = market
-            break
-    
-    if not market_data:
-        return None
-    
-    # Organizar las cuotas
-    odds_info = {
-        'home_team': event_data.get('home_team', 'Local'),
-        'away_team': event_data.get('away_team', 'Visitante'),
-        'commence_time': event_data.get('commence_time'),
-        'outcomes': []
-    }
-    
-    for outcome in market_data.get('outcomes', []):
-        odds_info['outcomes'].append({
-            'name': outcome.get('name'),
-            'price': outcome.get('price', 0.0)
-        })
-    
-    return odds_info
-
 def generate_sample_events(sport_key: str) -> List[Dict]:
-    """Genera eventos de ejemplo con cuotas realistas"""
+    """Genera eventos de ejemplo"""
     sample_events = []
     
     # Mapeo mejorado de equipos por deporte
     team_mapping = {
         'soccer_uefa_europa_league': [
-            ('Basel', 'FCSB', 1.57, 4.24, 5.55),
-            ('Roma', 'Brighton', 1.95, 3.60, 3.80),
-            ('Liverpool', 'Sparta Prague', 1.45, 4.50, 6.50),
+            ('Basel', 'FCSB'),
+            ('Roma', 'Brighton'),
+            ('Liverpool', 'Sparta Prague'),
         ],
         'soccer_epl': [
-            ('Manchester United', 'Liverpool', 2.10, 3.40, 3.20),
-            ('Arsenal', 'Chelsea', 1.85, 3.60, 4.00),
+            ('Manchester United', 'Liverpool'),
+            ('Arsenal', 'Chelsea'),
         ],
         'basketball_nba': [
-            ('Lakers', 'Warriors', 1.90, 1.90),  # No empate en NBA
+            ('Lakers', 'Warriors'),
         ],
         'default': [
-            ('Equipo Local', 'Equipo Visitante', 1.80, 3.50, 4.20),
+            ('Equipo Local', 'Equipo Visitante'),
         ]
     }
     
     teams = team_mapping.get(sport_key, team_mapping['default'])
     
-    for i, match_data in enumerate(teams):
-        if len(match_data) == 5:  # Fútbol con empate
-            home, away, home_odds, draw_odds, away_odds = match_data
-        else:  # Deportes sin empate
-            home, away, home_odds, away_odds = match_data
-            draw_odds = None
-        
+    for i, (home, away) in enumerate(teams):
         commence_time = datetime.now() + timedelta(hours=(i+1)*6)
-        
-        # Crear bookmaker con cuotas realistas
-        outcomes = [
-            {'name': home, 'price': home_odds},
-            {'name': away, 'price': away_odds}
-        ]
-        
-        if draw_odds:
-            outcomes.append({'name': 'Draw', 'price': draw_odds})
-        
-        example_bookmakers = [
-            {
-                'key': 'bet365',
-                'title': 'Bet365',
-                'markets': [
-                    {
-                        'key': 'h2h',
-                        'outcomes': outcomes
-                    }
-                ]
-            }
-        ]
         
         sample_events.append({
             'id': f"sample_{sport_key}_{i}",
@@ -420,7 +362,6 @@ def generate_sample_events(sport_key: str) -> List[Dict]:
             'home_team': home,
             'away_team': away,
             'commence_time': commence_time.isoformat(),
-            'bookmakers': example_bookmakers,
             'source': 'sample'
         })
     
@@ -447,18 +388,18 @@ def format_time(dt=None):
         dt = datetime.now()
     return dt.strftime('%Y-%m-%d %H:%M:%S')
 
-def send_group_notification(message: str, photo_id: str = None) -> bool:
+def send_group_notification(message: str, reply_markup=None, photo_id: str = None) -> bool:
     try:
         if photo_id:
-            bot.send_photo(GROUP_CHAT_ID, photo=photo_id, caption=message, parse_mode='Markdown')
+            bot.send_photo(GROUP_CHAT_ID, photo=photo_id, caption=message, parse_mode='Markdown', reply_markup=reply_markup)
         else:
-            bot.send_message(GROUP_CHAT_ID, text=message, parse_mode='Markdown')
+            bot.send_message(GROUP_CHAT_ID, text=message, parse_mode='Markdown', reply_markup=reply_markup)
         return True
     except Exception as e:
         print(f"❌ Error enviando notificación: {e}")
         return False
 
-# SISTEMA DE USUARIOS Y TRANSACCIONES CORREGIDO
+# SISTEMA DE USUARIOS Y TRANSACCIONES
 def register_user(user_id: int, username: str, first_name: str):
     conn = sqlite3.connect('cubabet.db')
     cursor = conn.cursor()
@@ -498,7 +439,7 @@ def has_minimum_balance(user_id: int, min_balance: float = 30.0) -> bool:
     user_info = get_user_info(user_id)
     return user_info[3] >= min_balance if user_info else False
 
-# SISTEMA DE DEPÓSITOS Y RETIROS SIMPLIFICADO Y CORREGIDO
+# SISTEMA DE DEPÓSITOS Y RETIROS
 def log_transaction(transaction_id: str, user_id: int, amount: float, trans_type: str, method: str, status: str = 'pending'):
     conn = sqlite3.connect('cubabet.db')
     cursor = conn.cursor()
@@ -557,7 +498,7 @@ def process_withdrawal(user_id: int, amount: float, card_number: str):
 
     return transaction_id, net_amount
 
-# SISTEMA DE APUESTAS
+# SISTEMA DE APUESTAS CON CUOTAS FIJAS
 def log_bet(bet_data: Dict) -> str:
     bet_id = f"BET{uuid.uuid4().hex[:8].upper()}"
 
@@ -574,7 +515,7 @@ def log_bet(bet_data: Dict) -> str:
         bet_id, bet_data['user_id'], bet_data['sport_key'], bet_data['sport_title'],
         bet_data['event_id'], bet_data['event_name'], bet_data['commence_time'],
         bet_data['market_key'], bet_data['market_name'], bet_data['outcome_name'],
-        bet_data['odds'], bet_data['amount'], bet_data['potential_win'], 'pending'
+        FIXED_ODDS, bet_data['amount'], bet_data['potential_win'], 'pending'
     ))
 
     cursor.execute('''
@@ -592,11 +533,11 @@ def log_bet(bet_data: Dict) -> str:
 def send_bet_ticket_notification(user_id: int, bet_data: Dict, bet_id: str):
     user_info = get_user_info(user_id)
 
-    market_names = {
-        'h2h': 'Ganador del Partido',
-        'spreads': 'Handicap',
-        'totals': 'Over/Under'
-    }
+    # Crear teclado para administradores
+    admin_markup = types.InlineKeyboardMarkup()
+    btn_win = types.InlineKeyboardButton("✅ Ganada", callback_data=f"admin_bet_win_{bet_id}")
+    btn_lose = types.InlineKeyboardButton("❌ Perdida", callback_data=f"admin_bet_lose_{bet_id}")
+    admin_markup.add(btn_win, btn_lose)
 
     ticket_message = f"""
 🎫 *TICKET DE APUESTA REGISTRADO*
@@ -606,12 +547,72 @@ def send_bet_ticket_notification(user_id: int, bet_data: Dict, bet_id: str):
 🎯 *Selección:* {escape_markdown(bet_data['outcome_name'])}
 💰 *Monto:* ${bet_data['amount']:.2f} CUP
 🏆 *Potencial:* ${bet_data['potential_win']:.2f} CUP
+📈 *Cuota:* {FIXED_ODDS}
 🆔 *Ticket:* `{bet_id}`
 🕒 *Fecha:* {format_time()}
 
-⚡ *¡Buena suerte!* 🍀"""
+⚡ *¡Buena suerte!* 🍀
 
-    send_group_notification(ticket_message)
+👑 *Acciones Admin:*"""
+
+    send_group_notification(ticket_message, reply_markup=admin_markup)
+
+def update_bet_status(bet_id: str, status: str, result: str):
+    """Actualiza el estado de una apuesta y procesa el pago si ganó"""
+    conn = sqlite3.connect('cubabet.db')
+    cursor = conn.cursor()
+    
+    # Obtener información de la apuesta
+    cursor.execute('SELECT * FROM sports_bets WHERE bet_id = ?', (bet_id,))
+    bet = cursor.fetchone()
+    
+    if not bet:
+        conn.close()
+        return False
+    
+    user_id = bet[1]
+    amount = bet[12]  # amount apostado
+    potential_win = bet[13]  # ganancia potencial
+    
+    # Actualizar estado de la apuesta
+    cursor.execute('''
+        UPDATE sports_bets 
+        SET status = ?, result = ? 
+        WHERE bet_id = ?
+    ''', (status, result, bet_id))
+    
+    # Si la apuesta ganó, procesar el pago
+    if status == 'won':
+        # Añadir ganancias al balance del usuario
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (potential_win, user_id))
+        
+        # Actualizar estadísticas del usuario
+        cursor.execute('''
+            UPDATE users 
+            SET bets_won = bets_won + 1, 
+                total_won = total_won + ?
+            WHERE user_id = ?
+        ''', (potential_win - amount, user_id))  # ganancia neta
+        
+        # Notificar al usuario
+        try:
+            user_info = get_user_info(user_id)
+            win_message = f"""
+🎉 *¡FELICIDADES! APUESTA GANADA*
+
+🎫 *Ticket:* `{bet_id}`
+💰 *Monto apostado:* ${amount:.2f} CUP
+🏆 *Ganancia:* ${potential_win:.2f} CUP
+💵 *Ganancia neta:* ${potential_win - amount:.2f} CUP
+
+¡Sigue así! 🍀"""
+            bot.send_message(user_id, win_message, parse_mode='Markdown')
+        except:
+            pass
+    
+    conn.commit()
+    conn.close()
+    return True
 
 # SISTEMA DE MENÚS
 def main_menu():
@@ -675,9 +676,9 @@ def deposit_methods_menu():
     markup.add(btn_transfermovil, btn_enzona, btn_back)
     return markup
 
-# NUEVAS FUNCIONES PARA MOSTRAR CUOTAS
+# NUEVAS FUNCIONES PARA MOSTRAR CUOTAS FIJAS
 def show_event_odds(call, sport_key: str, event_id: str):
-    """Muestra las cuotas del evento en teclados inline como en la imagen"""
+    """Muestra las opciones de apuesta con cuotas fijas"""
     user_id = call.from_user.id
     
     # Verificar saldo mínimo
@@ -692,7 +693,7 @@ def show_event_odds(call, sport_key: str, event_id: str):
     # Obtener información del evento
     event_data = get_event_with_odds(sport_key, event_id)
     if not event_data:
-        bot.answer_callback_query(call.id, "❌ No se pudo cargar las cuotas")
+        bot.answer_callback_query(call.id, "❌ No se pudo cargar el evento")
         return
     
     # Formatear tiempo del evento
@@ -723,25 +724,9 @@ def show_event_odds(call, sport_key: str, event_id: str):
         event_time = "Por definir"
         day_of_week = "Próximamente"
     
-    # Obtener cuotas organizadas
-    odds_info = format_odds_display(event_data, 'h2h')
-    
-    if not odds_info:
-        # Usar cuotas de ejemplo si no hay disponibles
-        odds_info = {
-            'home_team': event_data.get('home_team', 'Local'),
-            'away_team': event_data.get('away_team', 'Visitante'),
-            'commence_time': commence_time,
-            'outcomes': [
-                {'name': event_data.get('home_team', 'Local'), 'price': 1.85},
-                {'name': 'Draw', 'price': 3.40},
-                {'name': event_data.get('away_team', 'Visitante'), 'price': 4.20}
-            ]
-        }
-    
     # Construir mensaje
-    home_team = escape_markdown(odds_info['home_team'])
-    away_team = escape_markdown(odds_info['away_team'])
+    home_team = escape_markdown(event_data.get('home_team', 'Local'))
+    away_team = escape_markdown(event_data.get('away_team', 'Visitante'))
     
     # Determinar el deporte para el título
     sport_title = sport_key.replace('_', ' ').title()
@@ -762,61 +747,27 @@ def show_event_odds(call, sport_key: str, event_id: str):
 *Comienza en {time_display}*
 
 *1x2 (Tiempo Regular) - 3 opciones*  
+*Cuota fija: {FIXED_ODDS}*
 """
     
-    # Crear teclado inline con las cuotas
+    # Crear teclado inline con las opciones de apuesta
     markup = types.InlineKeyboardMarkup(row_width=3)
     
-    # Botones de cuotas
-    buttons_added = 0
-    for outcome in odds_info['outcomes']:
-        outcome_name = outcome['name']
-        price = outcome['price']
-        
-        if outcome_name == odds_info['home_team']:
-            btn_text = f"G1\n{price}"
-            callback_name = "home"
-        elif outcome_name == odds_info['away_team']:
-            btn_text = f"G2\n{price}"
-            callback_name = "away"
-        else:  # Empate
-            btn_text = f"X\n{price}"
-            callback_name = "draw"
-        
-        btn = types.InlineKeyboardButton(
-            btn_text,
-            callback_data=f"odds_{sport_key}_{event_id}_h2h_{callback_name}_{price}"
-        )
-        markup.add(btn)
-        buttons_added += 1
+    # Botones de selección con cuota fija
+    btn_g1 = types.InlineKeyboardButton(
+        f"G1\n{FIXED_ODDS}",
+        callback_data=f"bet_{sport_key}_{event_id}_h2h_home_{FIXED_ODDS}"
+    )
+    btn_x = types.InlineKeyboardButton(
+        f"X\n{FIXED_ODDS}",
+        callback_data=f"bet_{sport_key}_{event_id}_h2h_draw_{FIXED_ODDS}"
+    )
+    btn_g2 = types.InlineKeyboardButton(
+        f"G2\n{FIXED_ODDS}",
+        callback_data=f"bet_{sport_key}_{event_id}_h2h_away_{FIXED_ODDS}"
+    )
     
-    # Asegurar que siempre haya 3 botones
-    while buttons_added < 3:
-        if buttons_added == 0:
-            btn = types.InlineKeyboardButton(
-                "G1\n1.80",
-                callback_data=f"odds_{sport_key}_{event_id}_h2h_home_1.80"
-            )
-        elif buttons_added == 1:
-            btn = types.InlineKeyboardButton(
-                "X\n3.50", 
-                callback_data=f"odds_{sport_key}_{event_id}_h2h_draw_3.50"
-            )
-        else:
-            btn = types.InlineKeyboardButton(
-                "G2\n4.20",
-                callback_data=f"odds_{sport_key}_{event_id}_h2h_away_4.20"
-            )
-        markup.add(btn)
-        buttons_added += 1
-    
-    # Botones de acción
-    btn_row2 = []
-    btn_refresh = types.InlineKeyboardButton("🔄 Actualizar cuotas", callback_data=f"refresh_odds_{sport_key}_{event_id}")
-    btn_other_markets = types.InlineKeyboardButton("📊 Otros mercados", callback_data=f"markets_{sport_key}_{event_id}")
-    btn_row2.append(btn_refresh)
-    btn_row2.append(btn_other_markets)
-    markup.row(*btn_row2)
+    markup.add(btn_g1, btn_x, btn_g2)
     
     btn_back = types.InlineKeyboardButton("🔙 Volver Atras", callback_data=f"competition_{sport_key}")
     markup.add(btn_back)
@@ -830,9 +781,9 @@ def show_event_odds(call, sport_key: str, event_id: str):
         reply_markup=markup
     )
 
-def process_odds_selection(call, odds_data: str):
-    """Procesa cuando un usuario selecciona una cuota específica"""
-    parts = odds_data.split('_')
+def process_bet_selection(call, bet_data: str):
+    """Procesa cuando un usuario selecciona una opción de apuesta"""
+    parts = bet_data.split('_')
     if len(parts) < 5:
         bot.answer_callback_query(call.id, "❌ Error en datos de apuesta")
         return
@@ -841,7 +792,7 @@ def process_odds_selection(call, odds_data: str):
     sport_key = parts[0]
     event_id = '_'.join(parts[1:-3])
     market_key = parts[-3]
-    outcome_type = parts[-2]  # home, away, draw
+    outcome_type = parts[-2]  # home, draw, away
     odds = float(parts[-1])
     
     # Obtener información del evento
@@ -852,9 +803,9 @@ def process_odds_selection(call, odds_data: str):
     
     # Determinar el nombre del outcome basado en el tipo
     if outcome_type == 'home':
-        outcome_name = event_data.get('home_team', 'Local')
+        outcome_name = f"Gana {event_data.get('home_team', 'Local')}"
     elif outcome_type == 'away':
-        outcome_name = event_data.get('away_team', 'Visitante')
+        outcome_name = f"Gana {event_data.get('away_team', 'Visitante')}"
     else:  # draw
         outcome_name = 'Empate'
     
@@ -867,7 +818,7 @@ def process_odds_selection(call, odds_data: str):
         'event_name': f"{event_data.get('home_team', 'Local')} vs {event_data.get('away_team', 'Visitante')}",
         'market_key': market_key,
         'outcome_name': outcome_name,
-        'odds': odds
+        'odds': FIXED_ODDS  # Siempre usar cuota fija
     }
     
     # Pedir monto de apuesta
@@ -876,7 +827,7 @@ def process_odds_selection(call, odds_data: str):
 
 ⚽ *Evento:* {escape_markdown(event_data.get('home_team', 'Local'))} vs {escape_markdown(event_data.get('away_team', 'Visitante'))}
 🎯 *Selección:* {escape_markdown(outcome_name)}
-💰 *Cuota:* {odds:.2f}
+💰 *Cuota:* {FIXED_ODDS}
 
 💵 *Ingresa el monto a apostar (CUP):*
 💰 *Mínimo: $30.00*"""
@@ -888,7 +839,7 @@ def process_odds_selection(call, odds_data: str):
         parse_mode='Markdown'
     )
 
-# MANEJADORES PRINCIPALES CORREGIDOS
+# MANEJADORES PRINCIPALES
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -938,21 +889,49 @@ def handle_callback(call):
                 sport_key = parts[0]
                 event_id = '_'.join(parts[1:])
                 show_event_odds(call, sport_key, event_id)
-        elif call.data.startswith("odds_"):
-            odds_data = call.data.replace("odds_", "")
-            process_odds_selection(call, odds_data)
-        elif call.data.startswith("refresh_odds_"):
-            refresh_data = call.data.replace("refresh_odds_", "")
-            parts = refresh_data.split('_')
-            if len(parts) >= 2:
-                sport_key = parts[0]
-                event_id = '_'.join(parts[1:])
-                bot.answer_callback_query(call.id, "🔄 Actualizando cuotas...")
-                # Limpiar cache para forzar actualización
-                cache_key = f"{sport_key}_events"
-                if cache_key in events_cache:
-                    del events_cache[cache_key]
-                show_event_odds(call, sport_key, event_id)
+        elif call.data.startswith("bet_"):
+            bet_data = call.data.replace("bet_", "")
+            process_bet_selection(call, bet_data)
+        elif call.data.startswith("admin_bet_win_"):
+            # Manejar apuesta ganada por admin
+            if call.from_user.id != ADMIN_ID:
+                bot.answer_callback_query(call.id, "❌ Solo administradores")
+                return
+            bet_id = call.data.replace("admin_bet_win_", "")
+            if update_bet_status(bet_id, 'won', 'Ganada'):
+                bot.answer_callback_query(call.id, "✅ Apuesta marcada como GANADA")
+                # Actualizar mensaje en el grupo
+                try:
+                    bot.edit_message_reply_markup(
+                        chat_id=call.message.chat.id,
+                        message_id=call.message.message_id,
+                        reply_markup=None
+                    )
+                    bot.send_message(call.message.chat.id, f"✅ *APUESTA GANADA*\n\n🎫 Ticket: `{bet_id}`\n👤 Admin: {escape_markdown(call.from_user.first_name)}", parse_mode='Markdown')
+                except:
+                    pass
+            else:
+                bot.answer_callback_query(call.id, "❌ Error al actualizar apuesta")
+        elif call.data.startswith("admin_bet_lose_"):
+            # Manejar apuesta perdida por admin
+            if call.from_user.id != ADMIN_ID:
+                bot.answer_callback_query(call.id, "❌ Solo administradores")
+                return
+            bet_id = call.data.replace("admin_bet_lose_", "")
+            if update_bet_status(bet_id, 'lost', 'Perdida'):
+                bot.answer_callback_query(call.id, "✅ Apuesta marcada como PERDIDA")
+                # Actualizar mensaje en el grupo
+                try:
+                    bot.edit_message_reply_markup(
+                        chat_id=call.message.chat.id,
+                        message_id=call.message.message_id,
+                        reply_markup=None
+                    )
+                    bot.send_message(call.message.chat.id, f"❌ *APUESTA PERDIDA*\n\n🎫 Ticket: `{bet_id}`\n👤 Admin: {escape_markdown(call.from_user.first_name)}", parse_mode='Markdown')
+                except:
+                    pass
+            else:
+                bot.answer_callback_query(call.id, "❌ Error al actualizar apuesta")
         elif call.data == "money_menu":
             show_money_menu(call)
         elif call.data == "deposit_money":
@@ -1004,7 +983,7 @@ def show_sports_categories(call):
 • ⚾ Béisbol
 • 🏒 Hockey
 
-📈 *Odds en tiempo real*"""
+📈 *Cuota fija: 1.9*"""
 
     bot.edit_message_text(
         chat_id=call.message.chat.id,
@@ -1022,7 +1001,8 @@ def show_competitions_menu(call, sport_group: str):
 
 ⚽ *Selecciona una competición:*
 
-🕒 *Eventos próximos disponibles*"""
+🕒 *Eventos próximos disponibles*
+📈 *Cuota fija: 1.9*"""
 
     bot.edit_message_text(
         chat_id=call.message.chat.id,
@@ -1117,7 +1097,7 @@ def show_competition_events(call, competition_key: str):
         reply_markup=markup
     )
 
-# MANEJADOR DE APUESTAS CORREGIDO
+# MANEJADOR DE APUESTAS
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'placing_bet')
 def handle_bet_amount(message):
     user_id = message.from_user.id
@@ -1138,7 +1118,7 @@ def handle_bet_amount(message):
             bot.send_message(message.chat.id, f"❌ *Saldo insuficiente*\nTu saldo: ${user_info[3]:.2f} CUP", parse_mode='Markdown')
             return
 
-        potential_win = amount * user_state['odds']
+        potential_win = amount * FIXED_ODDS
 
         bet_data = {
             'user_id': user_id,
@@ -1150,7 +1130,7 @@ def handle_bet_amount(message):
             'market_key': user_state['market_key'],
             'market_name': user_state['market_key'],
             'outcome_name': user_state['outcome_name'],
-            'odds': user_state['odds'],
+            'odds': FIXED_ODDS,
             'amount': amount,
             'potential_win': potential_win
         }
@@ -1165,6 +1145,7 @@ def handle_bet_amount(message):
 🎫 *Ticket:* `{bet_id}`
 💰 *Monto:* ${amount:.2f} CUP
 🏆 *Potencial:* ${potential_win:.2f} CUP
+📈 *Cuota:* {FIXED_ODDS}
 
 ⚡ *¡Buena suerte!* 🍀"""
 
@@ -1174,7 +1155,7 @@ def handle_bet_amount(message):
     except ValueError:
         bot.send_message(message.chat.id, "❌ *Ingresa un número válido*", parse_mode='Markdown')
 
-# SISTEMA DE DEPÓSITOS CORREGIDO Y SIMPLIFICADO
+# SISTEMA DE DEPÓSITOS
 def show_deposit_methods(call):
     deposit_text = """
 💳 *DEPOSITAR FONDOS*
@@ -1214,7 +1195,7 @@ def start_deposit_process(call, method: str):
         parse_mode='Markdown'
     )
 
-# MANEJADOR DE DEPÓSITOS CORREGIDO
+# MANEJADOR DE DEPÓSITOS
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action', '').startswith('deposit_'))
 def handle_deposit_amount(message):
     user_id = message.from_user.id
@@ -1289,7 +1270,7 @@ def handle_screenshot(message):
     else:
         bot.reply_to(message, "❌ *No tienes depósitos pendientes*", parse_mode='Markdown')
 
-# SISTEMA DE RETIROS CORREGIDO Y SIMPLIFICADO
+# SISTEMA DE RETIROS
 def start_withdrawal_process(call):
     user_id = call.from_user.id
     user_info = get_user_info(user_id)
@@ -1315,7 +1296,7 @@ def start_withdrawal_process(call):
         parse_mode='Markdown'
     )
 
-# MANEJADOR DE RETIROS CORREGIDO
+# MANEJADOR DE RETIROS
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'withdrawal_amount')
 def handle_withdrawal_amount(message):
     user_id = message.from_user.id
